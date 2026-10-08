@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>NextMeetingOverlay</AssemblyName>
+    <RootNamespace>NextMeetingOverlay</RootNamespace>
+    <Version>1.2.0</Version>
+
+    <!-- Shown in Explorer file properties and Task Manager -->
+    <Product>Nächster Termin</Product>
+    <AssemblyTitle>Nächster Termin</AssemblyTitle>
+    <Description>Zeigt den nächsten Outlook-Termin als kleines Overlay an</Description>
+    <Copyright>HiSchuminator</Copyright>
+    <Authors>HiSchuminator</Authors>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+
+    <!-- One self-describing exe, no .pdb next to it -->
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <!-- dotnet publish -p:Portable=true : one exe incl. .NET runtime, settings stored next to the exe -->
+  <PropertyGroup Condition="'$(Portable)' == 'true'">
+    <DefineConstants>$(DefineConstants);PORTABLE</DefineConstants>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Ical.Net" Version="4.2.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,1097 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Threading;
+using Microsoft.Win32;
+using Drawing = System.Drawing;
+using Forms = System.Windows.Forms;
+
+namespace NextMeetingOverlay;
+
+public partial class MainWindow : Window
+{
+    private const double DockMargin = 2;     // Card already has a 6 px shadow margin
+    private const double SnapDistance = 40;  // drop this close to the top edge -> dock
+    private static readonly TimeSpan JohnnyLeadTime = TimeSpan.FromMinutes(10);   // button appears this early
+    private static readonly TimeSpan StartWindowBefore = TimeSpan.FromMinutes(1); // ask/auto-start window
+    private static readonly TimeSpan StartWindowAfter = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan MinFreeGap = TimeSpan.FromMinutes(10);
+
+    private const int HotkeyToggle = 1, HotkeyJoin = 2, HotkeyJohnny = 3, HotkeyClickThrough = 4;
+    private const string HotkeyHint = "Strg+Alt+Umschalt";
+
+    private static readonly Brush Orange = Frozen("#FFB020");
+    private static readonly Brush Yellow = Frozen("#FFD23F");
+    private static readonly Brush Red = Frozen("#FF5A5A");
+    private static readonly Brush RecordRed = Frozen("#D93636");
+    private static readonly Brush Green = Frozen("#3DDC84");
+    private static readonly Brush Gray = Frozen("#80FFFFFF");
+    private static readonly Brush DefaultBorder = Frozen("#33FFFFFF");
+    private static readonly Brush JohnnyBorder = Frozen("#66FF5A5A");
+
+    private readonly Settings _s = Settings.Load();
+    private readonly OutlookReader _reader = new();
+    private readonly IcsCalendarSource _ics = new();
+    private readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _refreshTimer = new();
+    private readonly DispatcherTimer _johnnyTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+    private readonly List<(MenuItem Item, Func<bool> IsChecked)> _checkItems = new();
+    private readonly HashSet<string> _johnnyHandled = new();   // meetings already asked about / auto-started
+
+    private List<Meeting> _meetings = new();
+    private string? _status = "Lade Termine …";
+    private Meeting? _shown;
+    private bool _refreshing;
+    private bool _blink;
+    private ContextMenu _menu = null!;
+    private MenuItem _keywordItem = null!;
+    private Forms.NotifyIcon? _tray;
+    private IntPtr _hwnd;
+    private bool _userHidden;
+    private bool _autoHidden;
+    private string? _toolTipKey;
+
+    // Mini mode: the card is shown while hovered, pinned by a click, or around a meeting's start.
+    private readonly DispatcherTimer _expandTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    private readonly DispatcherTimer _collapseTimer = new() { Interval = TimeSpan.FromMilliseconds(900) };
+    private bool _hoverExpanded;
+    private bool _pinnedExpanded;
+    private bool _autoExpanded;
+
+    private bool _johnnyRunning;
+    private JohnnyStatus? _johnny;       // null = not running or JohnnyAI without control pipe
+    private bool _johnnyPolling;
+    private Meeting? _balloonMeeting;    // meeting a "start recording?" balloon refers to
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        Opacity = _s.Opacity;
+        _menu = BuildMenu();
+        ContextMenu = _menu;   // on the window, so it works on the mini pill and the card
+
+        _expandTimer.Tick += (_, _) => { _expandTimer.Stop(); _hoverExpanded = true; ApplyExpansion(); };
+        _collapseTimer.Tick += (_, _) =>
+        {
+            _collapseTimer.Stop();
+            if (IsMouseOver || _menu.IsOpen) return;
+            _hoverExpanded = false;
+            ApplyExpansion();
+        };
+        MouseEnter += (_, _) => { _collapseTimer.Stop(); if (!_hoverExpanded) _expandTimer.Start(); };
+        MouseLeave += (_, _) => { _expandTimer.Stop(); if (_hoverExpanded) _collapseTimer.Start(); };
+        _menu.Closed += (_, _) => { if (!IsMouseOver && _hoverExpanded) _collapseTimer.Start(); };
+
+        SourceInitialized += (_, _) =>
+        {
+            _hwnd = new WindowInteropHelper(this).Handle;
+            HwndSource.FromHwnd(_hwnd)?.AddHook(WndProc);
+            ApplyWindowFlags();
+            RegisterHotkeys();
+        };
+        Loaded += (_, _) =>
+        {
+            RestorePosition();
+            BuildTray();
+            UpdateDisplay();
+            _ = RefreshAsync();
+            _ = PollJohnnyAsync();
+        };
+        SizeChanged += (_, _) => { if (_s.Dock != DockMode.Free) ApplyDock(); };
+
+        _tick.Tick += (_, _) => { UpdateAutoHide(); UpdateDisplay(); };
+        _tick.Start();
+
+        _refreshTimer.Interval = TimeSpan.FromSeconds(Math.Max(15, _s.RefreshSeconds));
+        _refreshTimer.Tick += async (_, _) => await RefreshAsync();
+        _refreshTimer.Start();
+
+        _johnnyTimer.Tick += async (_, _) => await PollJohnnyAsync();
+        _johnnyTimer.Start();
+
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
+    }
+
+    // ───────────────────────── Data ─────────────────────────
+
+    private async Task RefreshAsync()
+    {
+        if (_refreshing) return;
+        _refreshing = true;
+        try
+        {
+            var snapshot = _s.Clone();
+            var icsUrl = _s.IcsUrl;
+            _meetings = string.IsNullOrWhiteSpace(icsUrl)
+                ? await _reader.Run(() => _reader.ReadMeetings(snapshot))
+                : await _ics.ReadAsync(snapshot, icsUrl);
+            _status = null;
+        }
+        catch (OutlookNotRunningException)
+        {
+            _meetings = new();
+            _status = IsNewOutlookRunning()
+                ? "Neues Outlook: bitte Kalender-Link hinterlegen (Rechtsklick → Kalenderquelle)"
+                : "Outlook ist nicht geöffnet – bitte Outlook starten";
+        }
+        catch (Exception ex)
+        {
+            // Keep showing the last known meetings on transient errors (Outlook busy, network).
+            if (_meetings.Count == 0)
+                _status = ex is HttpRequestException or TaskCanceledException
+                    ? "Kalender-Link nicht erreichbar: " + ex.Message
+                    : "Kalender-Fehler: " + ex.Message;
+        }
+        finally
+        {
+            _refreshing = false;
+            _toolTipKey = null;
+            UpdateDisplay();
+        }
+    }
+
+    private static bool IsNewOutlookRunning()
+    {
+        var processes = Process.GetProcessesByName("olk");
+        foreach (var p in processes) p.Dispose();
+        return processes.Length > 0;
+    }
+
+    // ───────────────────────── Display ─────────────────────────
+
+    private void UpdateDisplay()
+    {
+        var now = DateTime.Now;
+        var upcoming = _meetings.Where(m => m.End > now).ToList();
+        var main = upcoming.FirstOrDefault();
+        _shown = main;
+        _blink = !_blink;
+
+        UpdateJohnnyButton(main, now);
+        UpdateMini(main, now);
+
+        if (main == null)
+        {
+            UpdateOverlapRows(new List<Meeting>(), now);
+            Accent.Background = Gray;
+            Card.BorderBrush = DefaultBorder;
+            TimeText.Visibility = Visibility.Collapsed;
+            SubjectText.Text = _status ?? $"Keine Termine in den nächsten {_s.LookaheadDays} Tagen";
+            SubjectText.Foreground = Gray;
+            LocationText.Visibility = Visibility.Collapsed;
+            FollowUpText.Visibility = Visibility.Collapsed;
+            JoinButton.Visibility = Visibility.Collapsed;
+            Card.ToolTip = "Rechtsklick: Einstellungen";
+            SetTrayText(SubjectText.Text);
+            return;
+        }
+
+        bool running = main.Start <= now;
+        var untilStart = main.Start - now;
+        bool imminent = !running && untilStart <= TimeSpan.FromMinutes(1);
+
+        Accent.Background = TrafficLight(main, now);
+        Card.BorderBrush = imminent && _blink ? Red : DefaultBorder;
+        SubjectText.Foreground = Brushes.White;
+
+        string relative = running
+            ? $"läuft · noch {FormatSpan(main.End - now)}"
+            : $"in {FormatSpan(untilStart)}";
+        string range = $"{DayPrefix(main.Start, now)}{main.Start:HH:mm}–{main.End:HH:mm}";
+        string subject = main.Subject.Length > 0 ? main.Subject : "(ohne Betreff)";
+
+        // Meetings that start before the main one ends run (partly) in parallel.
+        var overlaps = _s.ShowOverlaps
+            ? upcoming.Skip(1).Where(m => m.Start < main.End).ToList()
+            : new List<Meeting>();
+        var groupEnd = overlaps.Select(m => m.End).Append(main.End).Max();
+
+        if (_s.Compact)
+        {
+            UpdateOverlapRows(new List<Meeting>(), now);
+            TimeText.Visibility = Visibility.Collapsed;
+            SubjectText.Text = $"{main.Start:HH:mm}  {subject}  · {relative}"
+                               + (overlaps.Count > 0 ? $"  (+{overlaps.Count} parallel)" : "");
+            LocationText.Visibility = Visibility.Collapsed;
+            FollowUpText.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            TimeText.Visibility = Visibility.Visible;
+            TimeText.Text = $"{range} · {relative}";
+            SubjectText.Text = subject;
+            LocationText.Text = main.Location;
+            LocationText.Visibility = main.Location.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            UpdateOverlapRows(overlaps, now);
+
+            var followUp = upcoming.Skip(1).FirstOrDefault(m => m.Start >= main.Start && !overlaps.Contains(m));
+            if (_s.ShowFollowUp && followUp != null && followUp.Start.Date == now.Date)
+            {
+                var gap = followUp.Start - groupEnd;
+                string gapText = gap >= MinFreeGap ? $" · {FormatSpan(gap)} frei davor"
+                               : gap <= TimeSpan.Zero ? " · direkt im Anschluss"
+                               : "";
+                FollowUpText.Text = $"Danach: {followUp.Start:HH:mm} {followUp.Subject}{gapText}";
+                FollowUpText.Visibility = Visibility.Visible;
+            }
+            else FollowUpText.Visibility = Visibility.Collapsed;
+        }
+
+        JoinButton.Visibility = main.JoinUrl != null ? Visibility.Visible : Visibility.Collapsed;
+        JoinButton.ToolTip = $"Online-Meeting beitreten ({HotkeyHint}+J)";
+
+        UpdateToolTip(main, upcoming, range, now);
+        SetTrayText($"{main.Start:HH:mm} {subject} ({relative})");
+    }
+
+    /// <summary>
+    /// Traffic light shared by the mini pill and the card accent:
+    /// green = plenty of time, yellow = starts soon, red = starts in a few minutes or is running.
+    /// </summary>
+    private Brush TrafficLight(Meeting? m, DateTime now)
+    {
+        if (m == null) return Gray;
+        if (m.Start <= now) return Red;
+        var untilStart = m.Start - now;
+        if (untilStart <= TimeSpan.FromMinutes(1)) return _blink ? Red : Gray;
+        if (untilStart <= TimeSpan.FromMinutes(_s.RedMinutes)) return Red;
+        if (untilStart <= TimeSpan.FromMinutes(_s.YellowMinutes)) return Yellow;
+        return Green;
+    }
+
+    private void UpdateMini(Meeting? main, DateTime now)
+    {
+        MiniDot.Fill = TrafficLight(main, now);
+        MiniRecording.Visibility = _johnny?.Recording == true ? Visibility.Visible : Visibility.Collapsed;
+
+        if (main == null)
+        {
+            MiniText.Text = _status != null ? "!" : "frei";
+        }
+        else if (main.Start <= now)
+        {
+            MiniText.Text = $"noch {FormatSpan(main.End - now)}";
+        }
+        else
+        {
+            var untilStart = main.Start - now;
+            MiniText.Text = untilStart <= TimeSpan.FromMinutes(60) ? $"in {FormatSpan(untilStart)}"
+                          : main.Start.Date == now.Date ? $"{main.Start:HH:mm}"
+                          : $"{DayPrefix(main.Start, now).Trim()} {main.Start:HH:mm}";
+        }
+        MiniPill.ToolTip = main == null ? _status ?? "Keine anstehenden Termine" : null;
+
+        // "+1": meetings overlapping the shown one (same rule as the parallel rows in the card).
+        int overlapCount = main == null || !_s.ShowOverlaps ? 0
+            : _meetings.Count(m => m != main && m.End > now && m.Start >= main.Start && m.Start < main.End);
+        MiniOverlapText.Text = $"+{overlapCount}";
+        MiniOverlap.Visibility = overlapCount > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // Briefly show the details around a meeting's start (join button, JohnnyAI prompt).
+        _autoExpanded = _s.AutoExpandAtStart && main != null &&
+                        now >= main.Start - TimeSpan.FromMinutes(1) && now <= main.Start + TimeSpan.FromMinutes(2);
+        ApplyExpansion();
+    }
+
+    private void ApplyExpansion()
+    {
+        bool expanded = !_s.MiniMode || _hoverExpanded || _pinnedExpanded || _autoExpanded;
+        var cardVisibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        if (Card.Visibility == cardVisibility) return;
+        Card.Visibility = cardVisibility;
+        MiniPill.Visibility = expanded ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private readonly List<(Meeting Meeting, TextBlock Text)> _overlapRows = new();
+
+    /// <summary>
+    /// One row per meeting running in parallel to the main one, with its own join button.
+    /// Rows are only rebuilt when the set of meetings changes, so a click on a button is never
+    /// lost to the per-second refresh; the time text is updated in place.
+    /// </summary>
+    private void UpdateOverlapRows(List<Meeting> overlaps, DateTime now)
+    {
+        bool sameSet = overlaps.Count == _overlapRows.Count &&
+                       overlaps.Select(m => m.Key).SequenceEqual(_overlapRows.Select(r => r.Meeting.Key));
+        if (!sameSet)
+        {
+            OverlapPanel.Children.Clear();
+            _overlapRows.Clear();
+            foreach (var m in overlaps)
+            {
+                var grid = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var text = new TextBlock
+                {
+                    FontSize = 12,
+                    Foreground = Frozen("#D8FFFFFF"),
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                grid.Children.Add(text);
+
+                if (m.JoinUrl != null)
+                {
+                    var join = new Button
+                    {
+                        Template = (ControlTemplate)FindResource("PillButton"),
+                        Content = "Beitreten",
+                        Background = JoinButton.Background,
+                        BorderBrush = JoinButton.BorderBrush,
+                        Margin = new Thickness(8, 0, 0, 0),
+                        Cursor = Cursors.Hand,
+                        Focusable = false,
+                        ToolTip = $"„{m.Subject}“ beitreten",
+                    };
+                    var url = m.JoinUrl;
+                    join.Click += (_, _) => Join(url);
+                    Grid.SetColumn(join, 1);
+                    grid.Children.Add(join);
+                }
+
+                OverlapPanel.Children.Add(grid);
+                _overlapRows.Add((m, text));
+            }
+        }
+
+        OverlapPanel.Visibility = _overlapRows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var (m, text) in _overlapRows)
+        {
+            string state = m.Start <= now ? "läuft" : $"in {FormatSpan(m.Start - now)}";
+            text.Text = $"∥ Parallel: {m.Start:HH:mm}–{m.End:HH:mm} {m.Subject} · {state}";
+        }
+    }
+
+    /// <summary>Hover card: the shown meeting plus the rest of today including free gaps.</summary>
+    private void UpdateToolTip(Meeting main, List<Meeting> upcoming, string range, DateTime now)
+    {
+        string key = $"{now:yyyyMMddHHmm}|{main.Key}|{upcoming.Count}|{_s.ShowDayOverview}";
+        if (key == _toolTipKey) return;
+        _toolTipKey = key;
+
+        var panel = new StackPanel { MaxWidth = 440 };
+        panel.Children.Add(new TextBlock { Text = main.Subject, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = range + (main.Location.Length > 0 ? " · " + main.Location : ""), TextWrapping = TextWrapping.Wrap });
+
+        if (_s.ShowDayOverview)
+        {
+            var today = upcoming.Where(m => m.Start.Date <= now.Date).ToList();
+            if (today.Count > 0)
+            {
+                panel.Children.Add(new TextBlock { Text = "Heute noch", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 8, 0, 2) });
+                var cursor = now;
+                foreach (var m in today)
+                {
+                    var gap = m.Start - cursor;
+                    if (gap >= MinFreeGap)
+                        panel.Children.Add(new TextBlock { Text = $"        {FormatSpan(gap)} frei", Foreground = Brushes.SeaGreen, FontStyle = FontStyles.Italic });
+                    panel.Children.Add(new TextBlock
+                    {
+                        Text = $"{m.Start:HH:mm}–{m.End:HH:mm}  {m.Subject}" + (m.JoinUrl != null ? "  (online)" : ""),
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                        FontWeight = m == main ? FontWeights.SemiBold : FontWeights.Normal,
+                    });
+                    if (m.End > cursor) cursor = m.End;
+                }
+                if (cursor.Date == now.Date && cursor.Hour < 23)
+                    panel.Children.Add(new TextBlock { Text = $"Ab {cursor:HH:mm} frei", Foreground = Brushes.SeaGreen, FontStyle = FontStyles.Italic });
+            }
+        }
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Doppelklick: Outlook öffnen · Rechtsklick: Einstellungen\n{HotkeyHint}+O ein/aus · +J beitreten · +A Aufnahme · +K Klick-durch",
+            Foreground = Brushes.Gray,
+            FontSize = 11,
+            Margin = new Thickness(0, 8, 0, 0),
+        });
+        Card.ToolTip = new ToolTip { Content = panel };
+    }
+
+    private static string FormatSpan(TimeSpan span)
+    {
+        int minutes = (int)Math.Ceiling(span.TotalMinutes);
+        if (minutes < 1) return "< 1 Min";
+        if (minutes < 60) return $"{minutes} Min";
+        if (minutes < 24 * 60)
+        {
+            int h = minutes / 60, m = minutes % 60;
+            return m == 0 ? $"{h} Std" : $"{h} Std {m} Min";
+        }
+        int days = (int)Math.Round(span.TotalDays);
+        return days == 1 ? "1 Tag" : $"{days} Tagen";
+    }
+
+    private static string DayPrefix(DateTime start, DateTime now)
+    {
+        if (start.Date == now.Date) return "";
+        if (start.Date == now.Date.AddDays(1)) return "Morgen ";
+        return start.ToString("ddd dd.MM. ");
+    }
+
+    // ───────────────────────── JohnnyAI ─────────────────────────
+
+    private async Task PollJohnnyAsync()
+    {
+        if (_johnnyPolling) return;
+        _johnnyPolling = true;
+        try
+        {
+            _johnnyRunning = JohnnyAiClient.IsRunning;
+            _johnny = _johnnyRunning ? await JohnnyAiClient.GetStatusAsync() : null;
+            HandleMeetingStart();
+        }
+        finally
+        {
+            _johnnyPolling = false;
+        }
+        UpdateJohnnyButton(_shown, DateTime.Now);
+    }
+
+    private bool IsInStartWindow(Meeting m, DateTime now) =>
+        now >= m.Start - StartWindowBefore && now <= m.Start + StartWindowAfter && now < m.End;
+
+    private bool IsEligibleForJohnny(Meeting m) => !_s.JohnnyOnlyOnlineMeetings || m.JoinUrl != null;
+
+    /// <summary>At meeting start: offer (balloon) or automatically start a JohnnyAI recording once per meeting.</summary>
+    private void HandleMeetingStart()
+    {
+        var m = _shown;
+        var now = DateTime.Now;
+        if (m == null || _johnny == null || _johnny.Recording || _s.JohnnyStart == JohnnyStartMode.Off) return;
+        if (!IsInStartWindow(m, now) || !IsEligibleForJohnny(m) || !_johnnyHandled.Add(m.Key)) return;
+
+        if (_s.JohnnyStart == JohnnyStartMode.Auto)
+        {
+            _ = StartJohnnyAsync(m);
+            ShowInfo($"JohnnyAI-Aufnahme gestartet: {m.Subject}");
+        }
+        else
+        {
+            _balloonMeeting = m;
+            _tray?.ShowBalloonTip(15000, "Termin beginnt – Aufnahme starten?",
+                $"{m.Subject}\nHier klicken oder ⏺ im Overlay, um JohnnyAI aufnehmen zu lassen.", Forms.ToolTipIcon.Info);
+        }
+    }
+
+    private void UpdateJohnnyButton(Meeting? main, DateTime now)
+    {
+        if (!_s.ShowJohnnyButton || !_johnnyRunning)
+        {
+            JohnnyButton.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (_johnny?.Recording == true)
+        {
+            JohnnyButton.Visibility = Visibility.Visible;
+            JohnnyButton.Content = $"⏹ {_johnny.Time}";
+            JohnnyButton.Background = RecordRed;
+            JohnnyButton.BorderBrush = RecordRed;
+            JohnnyButton.ToolTip = "JohnnyAI nimmt auf" + (_johnny.Subject.Length > 0 ? $": {_johnny.Subject}" : "")
+                                   + $" – klicken zum Beenden ({HotkeyHint}+A)";
+            return;
+        }
+
+        var candidate = JohnnyCandidate(main, now);
+        if (candidate == null)
+        {
+            JohnnyButton.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        JohnnyButton.Visibility = Visibility.Visible;
+        JohnnyButton.BorderBrush = JohnnyBorder;
+        if (_johnny == null)
+        {
+            // JohnnyAI version without control pipe: hotkey toggle only, state unknown.
+            JohnnyButton.Content = "⏺";
+            JohnnyButton.Background = Brushes.Transparent;
+            JohnnyButton.ToolTip = "JohnnyAI-Aufnahme umschalten (wie Win+Shift+R) – Aufnahmestatus erst ab der neuen JohnnyAI-Version sichtbar";
+            return;
+        }
+
+        bool prompt = _s.JohnnyStart == JohnnyStartMode.Ask && IsInStartWindow(candidate, now) && IsEligibleForJohnny(candidate);
+        JohnnyButton.Content = prompt ? "⏺ Aufnahme starten?" : "⏺ Aufnahme";
+        JohnnyButton.Background = prompt && _blink ? Orange : Brushes.Transparent;
+        JohnnyButton.ToolTip = $"JohnnyAI-Aufnahme starten – verknüpft mit „{candidate.Subject}“ ({HotkeyHint}+A)";
+    }
+
+    /// <summary>The meeting a recording would belong to: running or starting within the lead time.</summary>
+    private static Meeting? JohnnyCandidate(Meeting? main, DateTime now) =>
+        main != null && main.Start - now <= JohnnyLeadTime ? main : null;
+
+    private async void OnJohnnyClick(object sender, RoutedEventArgs e) => await ToggleJohnnyAsync();
+
+    private async Task ToggleJohnnyAsync()
+    {
+        if (!_johnnyRunning)
+        {
+            ShowInfo("JohnnyAI läuft nicht.");
+            return;
+        }
+        if (_johnny == null)
+        {
+            if (!JohnnyAiBridge.ToggleRecording()) ShowInfo("JohnnyAI wurde nicht gefunden.");
+            return;
+        }
+
+        if (_johnny.Recording) await JohnnyAiClient.StopAsync();
+        else await StartJohnnyAsync(JohnnyCandidate(_shown, DateTime.Now));
+        await PollJohnnyAsync();
+    }
+
+    private async Task StartJohnnyAsync(Meeting? meeting)
+    {
+        if (meeting != null) _johnnyHandled.Add(meeting.Key);
+        if (await JohnnyAiClient.StartAsync(meeting) == null)
+            ShowInfo("JohnnyAI hat nicht geantwortet.");
+    }
+
+    // ───────────────────────── Actions ─────────────────────────
+
+    private void OnJoinClick(object sender, RoutedEventArgs e) => Join(_shown?.JoinUrl);
+
+    private static void Join(string? url)
+    {
+        if (url == null) return;
+
+        // Prefer the Teams app directly over the browser hop.
+        const string teamsPrefix = "https://teams.microsoft.com";
+        if (url.StartsWith(teamsPrefix, StringComparison.OrdinalIgnoreCase) && TryStart("msteams:" + url[teamsPrefix.Length..]))
+            return;
+        TryStart(url);
+    }
+
+    private async void OpenInOutlook()
+    {
+        var meeting = _shown;
+        if (meeting?.Source == MeetingSource.Outlook)
+        {
+            try
+            {
+                await _reader.Run(() => _reader.Open(meeting));
+                return;
+            }
+            catch (Exception ex) when (ex is not OutlookNotRunningException)
+            {
+                ShowInfo("Termin konnte nicht geöffnet werden: " + ex.Message);
+                return;
+            }
+            catch (OutlookNotRunningException) { /* fall through: just open Outlook */ }
+        }
+
+        // ICS source (or COM unavailable): open the Outlook calendar itself.
+        if (IsNewOutlookRunning())
+            TryStart("explorer.exe", @"shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows");
+        else if (!TryStart("outlook.exe", "/select outlook:calendar"))
+            ShowInfo("Outlook konnte nicht geöffnet werden.");
+    }
+
+    private static bool TryStart(string target, string? arguments = null)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(target) { UseShellExecute = true };
+            if (arguments != null) psi.Arguments = arguments;
+            Process.Start(psi);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private void ShowInfo(string text) =>
+        _tray?.ShowBalloonTip(4000, "Nächster Termin", text, Forms.ToolTipIcon.Info);
+
+    // ───────────────────────── Window flags, visibility, hotkeys ─────────────────────────
+
+    private void ApplyWindowFlags()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+        NativeMethods.SetExcludeFromCapture(_hwnd, _s.HideFromScreenShare);
+        NativeMethods.SetClickThrough(_hwnd, _s.ClickThrough);
+    }
+
+    private void UpdateAutoHide()
+    {
+        bool hide = _s.HideInFullscreen && NativeMethods.IsFullscreenOrPresenting();
+        if (hide == _autoHidden) return;
+        _autoHidden = hide;
+        ApplyVisibility();
+    }
+
+    private void ApplyVisibility()
+    {
+        bool show = !_userHidden && !_autoHidden;
+        if (show && !IsVisible) Show();
+        else if (!show && IsVisible) Hide();
+    }
+
+    private void SetUserHidden(bool hidden)
+    {
+        _userHidden = hidden;
+        ApplyVisibility();
+    }
+
+    private void RegisterHotkeys()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+        UnregisterHotkeys();
+        if (!_s.HotkeysEnabled) return;
+
+        const uint mods = NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT;
+        var failed = new List<string>();
+        foreach (var (id, key) in new[] { (HotkeyToggle, 'O'), (HotkeyJoin, 'J'), (HotkeyJohnny, 'A'), (HotkeyClickThrough, 'K') })
+            if (!NativeMethods.RegisterHotKey(_hwnd, id, mods, key))
+                failed.Add($"{HotkeyHint}+{key}");
+        if (failed.Count > 0)
+            Dispatcher.BeginInvoke(() => ShowInfo("Bereits von einem anderen Programm belegt: " + string.Join(", ", failed)),
+                DispatcherPriority.ApplicationIdle);
+    }
+
+    private void UnregisterHotkeys()
+    {
+        foreach (var id in new[] { HotkeyToggle, HotkeyJoin, HotkeyJohnny, HotkeyClickThrough })
+            NativeMethods.UnregisterHotKey(_hwnd, id);
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg != NativeMethods.WM_HOTKEY) return IntPtr.Zero;
+        switch (wParam.ToInt32())
+        {
+            case HotkeyToggle:
+                SetUserHidden(!_userHidden);
+                break;
+            case HotkeyJoin:
+                Join(_shown?.JoinUrl);
+                break;
+            case HotkeyJohnny:
+                _ = ToggleJohnnyAsync();
+                break;
+            case HotkeyClickThrough:
+                _s.ClickThrough = !_s.ClickThrough;
+                _s.Save();
+                ApplyWindowFlags();
+                ShowInfo(_s.ClickThrough ? "Klick-durch-Modus an – Einstellungen über das Tray-Symbol." : "Klick-durch-Modus aus.");
+                break;
+            default:
+                return IntPtr.Zero;
+        }
+        handled = true;
+        return IntPtr.Zero;
+    }
+
+    // ───────────────────────── Position & docking ─────────────────────────
+
+    private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2)
+        {
+            OpenInOutlook();
+            return;
+        }
+        double left = Left, top = Top;
+        try { DragMove(); }
+        catch (InvalidOperationException) { return; }
+
+        if (Math.Abs(Left - left) < 3 && Math.Abs(Top - top) < 3)
+        {
+            // A click, not a drag: pin / unpin the detail view in mini mode.
+            if (_s.MiniMode)
+            {
+                _pinnedExpanded = !_pinnedExpanded;
+                if (!_pinnedExpanded) _hoverExpanded = false;
+                ApplyExpansion();
+            }
+            if (_s.Dock != DockMode.Free) ApplyDock();  // undo the few pixels a click may have moved
+            return;
+        }
+        SnapAfterDrag();
+    }
+
+    private void SnapAfterDrag()
+    {
+        var screen = ScreenOfWindow();
+        _s.ScreenDevice = screen.DeviceName;
+        var area = WorkAreaInDips(screen);
+
+        if (Top - area.Top < SnapDistance)
+        {
+            double relative = (Left + ActualWidth / 2 - area.Left) / area.Width;
+            _s.Dock = relative < 1.0 / 3 ? DockMode.TopLeft
+                    : relative < 2.0 / 3 ? DockMode.TopCenter
+                    : DockMode.TopRight;
+            ApplyDock();
+        }
+        else
+        {
+            _s.Dock = DockMode.Free;
+            _s.Left = Left;
+            _s.Top = Top;
+        }
+        _s.Save();
+    }
+
+    private void SetDock(DockMode dock)
+    {
+        if (dock == DockMode.Free)
+        {
+            _s.Dock = DockMode.Free;
+            _s.Left = Left;
+            _s.Top = Top;
+            return;
+        }
+        _s.ScreenDevice ??= ScreenOfWindow().DeviceName;
+        _s.Dock = dock;
+        ApplyDock();
+    }
+
+    private void ApplyDock()
+    {
+        var area = WorkAreaInDips(TargetScreen());
+        double width = ActualWidth;
+        Left = _s.Dock switch
+        {
+            DockMode.TopLeft => area.Left + DockMargin,
+            DockMode.TopCenter => area.Left + (area.Width - width) / 2,
+            _ => area.Right - width - DockMargin,
+        };
+        Top = area.Top + DockMargin;
+    }
+
+    private void RestorePosition()
+    {
+        if (_s.Dock != DockMode.Free)
+        {
+            ApplyDock();
+            return;
+        }
+        Left = _s.Left;
+        Top = _s.Top;
+
+        // Saved position on a monitor that is no longer attached -> fall back to top right.
+        var probe = ToDevice(new Point(Left + 20, Top + 20));
+        bool visible = Forms.Screen.AllScreens.Any(sc => sc.WorkingArea.Contains((int)probe.X, (int)probe.Y));
+        if (!visible)
+        {
+            _s.Dock = DockMode.TopRight;
+            _s.ScreenDevice = null;
+            ApplyDock();
+        }
+    }
+
+    private Forms.Screen TargetScreen() =>
+        Forms.Screen.AllScreens.FirstOrDefault(sc => sc.DeviceName == _s.ScreenDevice)
+        ?? Forms.Screen.PrimaryScreen!;
+
+    private Forms.Screen ScreenOfWindow()
+    {
+        var center = ToDevice(new Point(Left + ActualWidth / 2, Top + ActualHeight / 2));
+        return Forms.Screen.FromPoint(new Drawing.Point((int)center.X, (int)center.Y));
+    }
+
+    private Rect WorkAreaInDips(Forms.Screen screen)
+    {
+        var wa = screen.WorkingArea;
+        var m = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformFromDevice ?? Matrix.Identity;
+        var topLeft = m.Transform(new Point(wa.Left, wa.Top));
+        var bottomRight = m.Transform(new Point(wa.Right, wa.Bottom));
+        return new Rect(topLeft, bottomRight);
+    }
+
+    private Point ToDevice(Point dip)
+    {
+        var m = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice ?? Matrix.Identity;
+        return m.Transform(dip);
+    }
+
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
+        Dispatcher.BeginInvoke(() => { if (_s.Dock != DockMode.Free) ApplyDock(); });
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == PowerModes.Resume)
+            Dispatcher.BeginInvoke(async () => await RefreshAsync());
+    }
+
+    // ───────────────────────── Menu ─────────────────────────
+
+    private ContextMenu BuildMenu()
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(Item("In Outlook öffnen", OpenInOutlook));
+        menu.Items.Add(Item("Jetzt aktualisieren", () => { _ics.Invalidate(); _ = RefreshAsync(); }));
+        menu.Items.Add(Item("Kalenderquelle …", EditCalendarSource));
+        menu.Items.Add(new Separator());
+
+        var position = new MenuItem { Header = "Position" };
+        position.Items.Add(Check("Oben links", () => _s.Dock == DockMode.TopLeft, () => SetDock(DockMode.TopLeft)));
+        position.Items.Add(Check("Oben Mitte", () => _s.Dock == DockMode.TopCenter, () => SetDock(DockMode.TopCenter)));
+        position.Items.Add(Check("Oben rechts", () => _s.Dock == DockMode.TopRight, () => SetDock(DockMode.TopRight)));
+        position.Items.Add(Check("Frei (dort, wo verschoben)", () => _s.Dock == DockMode.Free, () => SetDock(DockMode.Free)));
+        menu.Items.Add(position);
+
+        var hide = new MenuItem { Header = "Termine ausblenden" };
+        hide.Items.Add(Check("Als „frei“ markierte Termine (Blocker)", () => _s.HideFree, () => _s.HideFree = !_s.HideFree));
+        _keywordItem = Check(KeywordHeader(), () => _s.HideKeywordMatches, () => _s.HideKeywordMatches = !_s.HideKeywordMatches);
+        hide.Items.Add(_keywordItem);
+        hide.Items.Add(Check("Ganztägige Termine", () => _s.HideAllDay, () => _s.HideAllDay = !_s.HideAllDay));
+        hide.Items.Add(Check("Abgelehnte und abgesagte Termine", () => _s.HideDeclined, () => _s.HideDeclined = !_s.HideDeclined));
+        hide.Items.Add(Check("Mit Vorbehalt markierte Termine", () => _s.HideTentative, () => _s.HideTentative = !_s.HideTentative));
+        hide.Items.Add(Check("Private Termine", () => _s.HidePrivate, () => _s.HidePrivate = !_s.HidePrivate));
+        hide.Items.Add(new Separator());
+        hide.Items.Add(Item("Stichwörter bearbeiten …", EditKeywords));
+        menu.Items.Add(hide);
+
+        var johnny = new MenuItem { Header = "JohnnyAI" };
+        johnny.Items.Add(Check("Aufnahmeknopf anzeigen", () => _s.ShowJohnnyButton, () => _s.ShowJohnnyButton = !_s.ShowJohnnyButton));
+        johnny.Items.Add(new Separator());
+        johnny.Items.Add(Check("Bei Terminbeginn: nichts tun", () => _s.JohnnyStart == JohnnyStartMode.Off, () => _s.JohnnyStart = JohnnyStartMode.Off));
+        johnny.Items.Add(Check("Bei Terminbeginn: Aufnahme anbieten", () => _s.JohnnyStart == JohnnyStartMode.Ask, () => _s.JohnnyStart = JohnnyStartMode.Ask));
+        johnny.Items.Add(Check("Bei Terminbeginn: automatisch aufnehmen", () => _s.JohnnyStart == JohnnyStartMode.Auto, () => _s.JohnnyStart = JohnnyStartMode.Auto));
+        johnny.Items.Add(Check("Nur bei Online-Meetings (Teams-/Zoom-Link)", () => _s.JohnnyOnlyOnlineMeetings, () => _s.JohnnyOnlyOnlineMeetings = !_s.JohnnyOnlyOnlineMeetings));
+        menu.Items.Add(johnny);
+
+        var view = new MenuItem { Header = "Anzeige" };
+        view.Items.Add(Check("Mini-Modus (Ampel, Details bei Mausberührung oder Klick)", () => _s.MiniMode,
+            () => { _s.MiniMode = !_s.MiniMode; _pinnedExpanded = _hoverExpanded = false; ApplyExpansion(); }));
+        view.Items.Add(Check("Bei Terminbeginn kurz aufklappen", () => _s.AutoExpandAtStart, () => _s.AutoExpandAtStart = !_s.AutoExpandAtStart));
+        view.Items.Add(new Separator());
+        view.Items.Add(Check("Folgetermin und freie Zeit anzeigen", () => _s.ShowFollowUp, () => _s.ShowFollowUp = !_s.ShowFollowUp));
+        view.Items.Add(Check("Überschneidende Termine anzeigen", () => _s.ShowOverlaps, () => _s.ShowOverlaps = !_s.ShowOverlaps));
+        view.Items.Add(Check("Tagesübersicht beim Darüberfahren", () => _s.ShowDayOverview, () => _s.ShowDayOverview = !_s.ShowDayOverview));
+        view.Items.Add(Check("Kompakt (eine Zeile)", () => _s.Compact, () => _s.Compact = !_s.Compact));
+        view.Items.Add(Check("Teams-/Zoom-Link erkennen („Beitreten“)", () => _s.DetectJoinLink, () => _s.DetectJoinLink = !_s.DetectJoinLink));
+        var opacity = new MenuItem { Header = "Deckkraft" };
+        foreach (var value in new[] { 1.0, 0.95, 0.85, 0.75, 0.6 })
+            opacity.Items.Add(Check($"{value * 100:0} %", () => Math.Abs(_s.Opacity - value) < 0.001,
+                () => { _s.Opacity = value; Opacity = value; }));
+        view.Items.Add(opacity);
+        menu.Items.Add(view);
+
+        var visibility = new MenuItem { Header = "Sichtbarkeit" };
+        visibility.Items.Add(Check("Bei Bildschirmfreigabe unsichtbar (Teams, Zoom, Screenshots)", () => _s.HideFromScreenShare, () => _s.HideFromScreenShare = !_s.HideFromScreenShare));
+        visibility.Items.Add(Check("Bei Vollbild und Präsentationen ausblenden", () => _s.HideInFullscreen, () => _s.HideInFullscreen = !_s.HideInFullscreen));
+        visibility.Items.Add(Check($"Klick-durch-Modus ({HotkeyHint}+K)", () => _s.ClickThrough, () => _s.ClickThrough = !_s.ClickThrough));
+        visibility.Items.Add(Check($"Tastenkürzel ({HotkeyHint}+O/J/A/K)", () => _s.HotkeysEnabled, () => _s.HotkeysEnabled = !_s.HotkeysEnabled));
+        menu.Items.Add(visibility);
+
+        menu.Items.Add(Check("Mit Windows starten", () => Autostart.IsEnabled, () => Autostart.Set(!Autostart.IsEnabled)));
+        menu.Items.Add(Item($"Overlay ausblenden ({HotkeyHint}+O)", () => SetUserHidden(true)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("Beenden", ExitApp));
+
+        menu.Opened += (_, _) =>
+        {
+            foreach (var (item, isChecked) in _checkItems) item.IsChecked = isChecked();
+            _keywordItem.Header = KeywordHeader();
+        };
+        return menu;
+    }
+
+    private string KeywordHeader()
+    {
+        var preview = string.Join(", ", _s.ExcludeKeywords.Take(3));
+        return _s.ExcludeKeywords.Count > 3
+            ? $"Termine mit Stichwort ({preview} …)"
+            : $"Termine mit Stichwort ({preview})";
+    }
+
+    private static MenuItem Item(string header, Action action)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    private MenuItem Check(string header, Func<bool> isChecked, Action toggle)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) =>
+        {
+            toggle();
+            _s.Save();
+            ApplyWindowFlags();
+            RegisterHotkeys();
+            UpdateAutoHide();
+            _toolTipKey = null;
+            UpdateDisplay();
+            _ = RefreshAsync();
+        };
+        _checkItems.Add((item, isChecked));
+        return item;
+    }
+
+    private void EditKeywords()
+    {
+        var text = ShowTextDialog("Stichwörter ausblenden",
+            "Termine, deren Betreff eines dieser Stichwörter enthält, werden ausgeblendet.\nEin Stichwort pro Zeile, Groß-/Kleinschreibung egal.",
+            string.Join(Environment.NewLine, _s.ExcludeKeywords), multiline: true);
+        if (text == null) return;
+        _s.ExcludeKeywords = text
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _s.Save();
+        _ = RefreshAsync();
+    }
+
+    private void EditCalendarSource()
+    {
+        var text = ShowTextDialog("Kalenderquelle",
+            "Leer lassen: Termine direkt aus dem klassischen Outlook lesen.\n\n" +
+            "Für das neue Outlook (oder wenn das klassische nicht erreichbar ist) den ICS-Link deines Kalenders einfügen:\n" +
+            "Outlook im Web → Einstellungen → Kalender → Freigegebene Kalender → „Kalender veröffentlichen“ → " +
+            "Kalender wählen, „Kann alle Details anzeigen“ (oder „Kann Titel und Orte anzeigen“) → Veröffentlichen → ICS-Link kopieren.\n\n" +
+            "Wer diesen Link kennt, kann den Kalender lesen. Er wird hier nur verschlüsselt für deinen Windows-Benutzer gespeichert.",
+            _s.IcsUrl ?? "", multiline: false);
+        if (text == null) return;
+        _s.IcsUrl = text;
+        _s.Save();
+        _ics.Invalidate();
+        _meetings = new();
+        _status = "Lade Termine …";
+        UpdateDisplay();
+        _ = RefreshAsync();
+    }
+
+    private static string? ShowTextDialog(string title, string intro, string initial, bool multiline)
+    {
+        var box = new TextBox
+        {
+            Text = initial,
+            AcceptsReturn = multiline,
+            TextWrapping = multiline ? TextWrapping.NoWrap : TextWrapping.Wrap,
+            Height = multiline ? 180 : 60,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        var save = new Button { Content = "Speichern", Width = 90, Margin = new Thickness(0, 10, 0, 0), HorizontalAlignment = HorizontalAlignment.Right, IsDefault = !multiline };
+        var panel = new StackPanel { Margin = new Thickness(14) };
+        panel.Children.Add(new TextBlock { Text = intro, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+        panel.Children.Add(box);
+        panel.Children.Add(save);
+
+        var dialog = new Window
+        {
+            Title = title,
+            Content = panel,
+            Width = multiline ? 380 : 520,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ResizeMode = ResizeMode.NoResize,
+            Topmost = true,
+        };
+        save.Click += (_, _) => dialog.DialogResult = true;
+        dialog.Loaded += (_, _) => { box.Focus(); box.SelectAll(); };
+        return dialog.ShowDialog() == true ? box.Text : null;
+    }
+
+    // ───────────────────────── Tray ─────────────────────────
+
+    private void BuildTray()
+    {
+        _tray = new Forms.NotifyIcon { Icon = CreateTrayIcon(), Visible = true, Text = "Nächster Termin" };
+        _tray.MouseUp += (_, e) =>
+        {
+            if (e.Button == Forms.MouseButtons.Left)
+            {
+                SetUserHidden(IsVisible);
+            }
+            else if (e.Button == Forms.MouseButtons.Right)
+            {
+                SetUserHidden(false);
+                if (!IsVisible) Show();   // even while auto-hidden, the menu needs a visible owner
+                Activate();
+                _menu.PlacementTarget = this;
+                _menu.Placement = PlacementMode.MousePoint;
+                _menu.IsOpen = true;
+            }
+        };
+        _tray.BalloonTipClicked += async (_, _) =>
+        {
+            var meeting = _balloonMeeting;
+            _balloonMeeting = null;
+            if (meeting == null || _johnny == null || _johnny.Recording) return;
+            await StartJohnnyAsync(meeting);
+            await PollJohnnyAsync();
+        };
+        _tray.BalloonTipClosed += (_, _) => _balloonMeeting = null;
+    }
+
+    private void SetTrayText(string text)
+    {
+        if (_tray == null) return;
+        _tray.Text = text.Length > 63 ? text[..62] + "…" : text;
+    }
+
+    private static Drawing.Icon CreateTrayIcon()
+    {
+        // Same icon as the exe (app.ico); the drawn fallback only kicks in if extraction fails.
+        try
+        {
+            var exeIcon = Environment.ProcessPath != null ? Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath) : null;
+            if (exeIcon != null) return new Drawing.Icon(exeIcon, Forms.SystemInformation.SmallIconSize);
+        }
+        catch { /* fall back to drawing */ }
+
+        using var bmp = new Drawing.Bitmap(32, 32);
+        using (var g = Drawing.Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.Clear(Drawing.Color.Transparent);
+            using var fill = new Drawing.SolidBrush(Drawing.Color.FromArgb(76, 194, 255));
+            g.FillEllipse(fill, 1, 1, 30, 30);
+            using var pen = new Drawing.Pen(Drawing.Color.White, 3) { StartCap = Drawing.Drawing2D.LineCap.Round, EndCap = Drawing.Drawing2D.LineCap.Round };
+            g.DrawLine(pen, 16, 16, 16, 7);
+            g.DrawLine(pen, 16, 16, 23, 16);
+        }
+        return Drawing.Icon.FromHandle(bmp.GetHicon());
+    }
+
+    // ───────────────────────── Shutdown ─────────────────────────
+
+    private bool _exiting;
+
+    private void ExitApp()
+    {
+        if (_exiting) return;
+        _exiting = true;
+        SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        if (_hwnd != IntPtr.Zero) UnregisterHotkeys();
+        _s.Save();
+        if (_tray != null)
+        {
+            _tray.Visible = false;
+            _tray.Dispose();
+        }
+        _reader.Dispose();
+        Application.Current.Shutdown();
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        base.OnClosed(e);
+        ExitApp();
+    }
+
+    private static Brush Frozen(string hex)
+    {
+        var brush = (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
+        brush.Freeze();
+        return brush;
+    }
+}

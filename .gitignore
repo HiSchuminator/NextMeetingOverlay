@@ -1,0 +1,13 @@
+# Build output
+bin/
+obj/
+publish/
+portable/
+
+# Personal settings (filters, keywords, encrypted calendar link) - never commit
+NextMeetingOverlay-Daten/
+settings.json
+
+# IDE
+.vs/
+*.user

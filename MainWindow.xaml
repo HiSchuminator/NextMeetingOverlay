@@ -1,0 +1,86 @@
+﻿<Window x:Class="NextMeetingOverlay.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Nächster Termin" Icon="app.ico"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        Topmost="True" ShowInTaskbar="False" ShowActivated="False"
+        ResizeMode="NoResize" SizeToContent="WidthAndHeight" UseLayoutRounding="True"
+        MouseLeftButtonDown="OnMouseLeftButtonDown">
+
+    <Window.Resources>
+        <ControlTemplate x:Key="PillButton" TargetType="Button">
+            <Border x:Name="Bg" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="1" CornerRadius="6" Padding="9,3">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  TextElement.Foreground="White" TextElement.FontSize="12"
+                                  TextElement.FontWeight="SemiBold"/>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Bg" Property="Opacity" Value="0.8"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+    </Window.Resources>
+
+    <Grid>
+    <!-- Mini mode: traffic-light pill; the Card below expands on hover / click -->
+    <Border x:Name="MiniPill" Margin="6" CornerRadius="12" Background="#F01F2023"
+            BorderBrush="#33FFFFFF" BorderThickness="1" Padding="9,4,11,4"
+            HorizontalAlignment="Left" VerticalAlignment="Top" Visibility="Collapsed">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="10" ShadowDepth="1" Opacity="0.4"/>
+        </Border.Effect>
+        <StackPanel Orientation="Horizontal">
+            <Ellipse x:Name="MiniDot" Width="10" Height="10" Fill="#3DDC84" VerticalAlignment="Center"/>
+            <TextBlock x:Name="MiniText" Margin="7,0,0,0" FontSize="12.5" FontWeight="SemiBold"
+                       Foreground="White" VerticalAlignment="Center"/>
+            <Border x:Name="MiniOverlap" Margin="6,0,0,0" Padding="4,0" CornerRadius="6" Background="#33FFFFFF"
+                    VerticalAlignment="Center" Visibility="Collapsed">
+                <TextBlock x:Name="MiniOverlapText" FontSize="11" FontWeight="SemiBold" Foreground="White"/>
+            </Border>
+            <TextBlock x:Name="MiniRecording" Text="⏺" Margin="6,0,0,0" FontSize="12" Foreground="#FF5A5A"
+                       VerticalAlignment="Center" Visibility="Collapsed"/>
+        </StackPanel>
+    </Border>
+
+    <Border x:Name="Card" Margin="6" CornerRadius="10" Background="#F01F2023"
+            BorderBrush="#33FFFFFF" BorderThickness="1" Padding="10,8"
+            MinWidth="240" MaxWidth="460">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.45"/>
+        </Border.Effect>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Border x:Name="Accent" Width="4" CornerRadius="2" Background="#4CC2FF" Margin="0,1,10,1"/>
+
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock x:Name="TimeText" FontSize="11.5" Foreground="#B8FFFFFF"/>
+                <TextBlock x:Name="SubjectText" FontSize="14.5" FontWeight="SemiBold" Foreground="White"
+                           TextTrimming="CharacterEllipsis"/>
+                <TextBlock x:Name="LocationText" FontSize="11" Foreground="#8CFFFFFF"
+                           TextTrimming="CharacterEllipsis"/>
+                <!-- Meetings overlapping the main one, one row each (filled in code) -->
+                <StackPanel x:Name="OverlapPanel" Margin="0,4,0,0"/>
+                <TextBlock x:Name="FollowUpText" FontSize="11" Foreground="#8CFFFFFF" Margin="0,3,0,0"
+                           TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                <Button x:Name="JohnnyButton" Template="{StaticResource PillButton}" Content="⏺"
+                        Background="Transparent" BorderBrush="#66FF5A5A" Margin="0,0,6,0"
+                        Cursor="Hand" Focusable="False" Click="OnJohnnyClick"
+                        ToolTip="JohnnyAI-Aufnahme starten/stoppen (wie Win+Shift+R)"/>
+                <Button x:Name="JoinButton" Template="{StaticResource PillButton}" Content="Beitreten"
+                        Background="#5B5FC7" BorderBrush="#5B5FC7"
+                        Cursor="Hand" Focusable="False" Click="OnJoinClick"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Grid>
+</Window>
