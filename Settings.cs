@@ -147,24 +147,67 @@ public sealed class Settings
     public Settings Clone() => JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(this, Options), Options)!;
 }
 
+/// <summary>
+/// "Start with Windows" = a Run entry plus an "enabled" mark in Explorer's StartupApproved list
+/// (the list behind Settings → Apps → Startup). Newer Windows 11 builds skip Run entries that
+/// have no mark there - observed 2026-10-09 on 26H2: the entry existed but was never launched.
+/// </summary>
 public static class Autostart
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string ApprovedKey = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
     private const string ValueName = "NextMeetingOverlay";
+
+    // First byte 02 = enabled, 03 = disabled by the user; remaining 11 bytes = timestamp (0 = none).
+    private static readonly byte[] EnabledMark = { 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+    private static string Command => $"\"{Environment.ProcessPath}\"";
 
     public static bool IsEnabled
     {
         get
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-            return key?.GetValue(ValueName) is string;
+            using var run = Registry.CurrentUser.OpenSubKey(RunKey);
+            if (run?.GetValue(ValueName) is not string) return false;
+            using var approved = Registry.CurrentUser.OpenSubKey(ApprovedKey);
+            return !(approved?.GetValue(ValueName) is byte[] mark && mark.Length > 0 && (mark[0] & 1) == 1);
         }
     }
 
     public static void Set(bool enabled)
     {
-        using var key = Registry.CurrentUser.CreateSubKey(RunKey);
-        if (enabled) key.SetValue(ValueName, $"\"{Environment.ProcessPath}\"");
-        else key.DeleteValue(ValueName, false);
+        using var run = Registry.CurrentUser.CreateSubKey(RunKey);
+        using var approved = Registry.CurrentUser.CreateSubKey(ApprovedKey);
+        if (enabled)
+        {
+            run.SetValue(ValueName, Command);
+            approved.SetValue(ValueName, EnabledMark, RegistryValueKind.Binary);
+        }
+        else
+        {
+            run.DeleteValue(ValueName, false);
+            approved.DeleteValue(ValueName, false);
+        }
+    }
+
+    /// <summary>
+    /// At startup: if autostart is on but points to another location (portable exe was moved),
+    /// follow the exe; and add the missing approval mark for entries created by older versions.
+    /// Never re-enables an entry the user switched off in Windows settings.
+    /// </summary>
+    public static void Repair()
+    {
+        try
+        {
+            using var run = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
+            if (run?.GetValue(ValueName) is not string current) return;
+            if (!string.Equals(current, Command, StringComparison.OrdinalIgnoreCase))
+                run.SetValue(ValueName, Command);
+
+            using var approved = Registry.CurrentUser.CreateSubKey(ApprovedKey);
+            if (approved.GetValue(ValueName) is not byte[])
+                approved.SetValue(ValueName, EnabledMark, RegistryValueKind.Binary);
+        }
+        catch { /* not critical */ }
     }
 }

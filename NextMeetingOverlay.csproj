@@ -9,7 +9,7 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>NextMeetingOverlay</AssemblyName>
     <RootNamespace>NextMeetingOverlay</RootNamespace>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
 
     <!-- Shown in Explorer file properties and Task Manager -->
     <Product>Nächster Termin</Product>

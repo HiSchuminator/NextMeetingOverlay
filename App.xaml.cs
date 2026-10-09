@@ -22,6 +22,8 @@ public partial class App : Application
             return;
         }
 
+        if (Settings.Profile == null) Autostart.Repair();
+
         base.OnStartup(e);
         new MainWindow().Show();
     }
