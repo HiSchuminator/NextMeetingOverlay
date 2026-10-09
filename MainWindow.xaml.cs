@@ -101,10 +101,11 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             RestorePosition();
-            BuildTray();
+            if (!Demo.Active) BuildTray();
             UpdateDisplay();
             _ = RefreshAsync();
             _ = PollJohnnyAsync();
+            if (Demo.Active) Dispatcher.BeginInvoke(async () => await ExportDemoScreenshotAsync(), DispatcherPriority.ApplicationIdle);
         };
         SizeChanged += (_, _) => { if (_s.Dock != DockMode.Free) ApplyDock(); };
 
@@ -126,6 +127,13 @@ public partial class MainWindow : Window
 
     private async Task RefreshAsync()
     {
+        if (Demo.Active)
+        {
+            _meetings = Demo.Meetings();
+            _status = null;
+            UpdateDisplay();
+            return;
+        }
         if (_refreshing) return;
         _refreshing = true;
         try
@@ -370,7 +378,8 @@ public partial class MainWindow : Window
         foreach (var (m, text) in _overlapRows)
         {
             string state = m.Start <= now ? "läuft" : $"in {FormatSpan(m.Start - now)}";
-            text.Text = $"∥ Parallel: {m.Start:HH:mm}–{m.End:HH:mm} {m.Subject} · {state}";
+            text.Text = $"∥ {m.Start:HH:mm}–{m.End:HH:mm} {m.Subject} · {state}";
+            text.ToolTip = $"Parallel: {m.Subject} ({m.Start:HH:mm}–{m.End:HH:mm})";
         }
     }
 
@@ -445,6 +454,13 @@ public partial class MainWindow : Window
 
     private async Task PollJohnnyAsync()
     {
+        if (Demo.Active)
+        {
+            _johnnyRunning = true;
+            _johnny = Demo.Johnny;
+            UpdateJohnnyButton(_shown, DateTime.Now);
+            return;
+        }
         if (_johnnyPolling) return;
         _johnnyPolling = true;
         try
@@ -620,7 +636,7 @@ public partial class MainWindow : Window
     private void ApplyWindowFlags()
     {
         if (_hwnd == IntPtr.Zero) return;
-        NativeMethods.SetExcludeFromCapture(_hwnd, _s.HideFromScreenShare);
+        NativeMethods.SetExcludeFromCapture(_hwnd, _s.HideFromScreenShare && !Demo.Active);
         NativeMethods.SetClickThrough(_hwnd, _s.ClickThrough);
     }
 
@@ -1059,6 +1075,108 @@ public partial class MainWindow : Window
             g.DrawLine(pen, 16, 16, 23, 16);
         }
         return Drawing.Icon.FromHandle(bmp.GetHicon());
+    }
+
+    // ───────────────────────── Demo screenshot ─────────────────────────
+
+    /// <summary>Renders mini pill, expanded card and context menu side by side into one PNG, then exits.</summary>
+    private async Task ExportDemoScreenshotAsync()
+    {
+        const double dpi = 192;   // 2x for crisp images on GitHub
+        var root = (FrameworkElement)Content;
+        _s.AutoExpandAtStart = false;
+
+        async Task Settle()
+        {
+            UpdateDisplay();
+            await Task.Delay(300);
+            root.UpdateLayout();
+        }
+
+        _pinnedExpanded = false;
+        ApplyExpansion();
+        await Settle();
+        var mini = Snapshot(root, dpi);
+
+        _pinnedExpanded = true;
+        ApplyExpansion();
+        await Settle();
+        var card = Snapshot(root, dpi);
+
+        _menu.PlacementTarget = this;
+        _menu.Placement = PlacementMode.Bottom;
+        _menu.IsOpen = true;
+        await Task.Delay(500);
+        _menu.UpdateLayout();
+        var menu = Snapshot(_menu, dpi);
+        _menu.IsOpen = false;
+
+        SaveComposite(Demo.ExportPath!, dpi,
+            (mini, "Klein: Ampel-Pille"),
+            (card, "Aufgeklappt: Details"),
+            (menu, "Rechtsklick: Einstellungen"));
+        ExitApp();
+    }
+
+    private static System.Windows.Media.Imaging.BitmapSource Snapshot(FrameworkElement element, double dpi)
+    {
+        double w = element.ActualWidth, h = element.ActualHeight;
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+            // 1:1 crop of the element's own area - without an absolute viewbox the brush would
+            // stretch the effect bounds (drop shadow) into the rectangle and squash the content.
+            dc.DrawRectangle(new VisualBrush(element)
+            {
+                Stretch = Stretch.None,
+                ViewboxUnits = BrushMappingMode.Absolute,
+                Viewbox = new Rect(0, 0, w, h),
+                AlignmentX = AlignmentX.Left,
+                AlignmentY = AlignmentY.Top,
+            }, null, new Rect(0, 0, w, h));
+        var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+            (int)Math.Ceiling(w * dpi / 96), (int)Math.Ceiling(h * dpi / 96), dpi, dpi, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private static void SaveComposite(string path, double dpi,
+        params (System.Windows.Media.Imaging.BitmapSource Image, string Caption)[] parts)
+    {
+        const double pad = 36, gap = 48, captionHeight = 30;
+        var sizes = parts.Select(p => new Size(p.Image.PixelWidth * 96 / dpi, p.Image.PixelHeight * 96 / dpi)).ToList();
+        double width = pad * 2 + sizes.Sum(s => s.Width) + gap * (parts.Length - 1);
+        double height = pad * 2 + captionHeight + sizes.Max(s => s.Height);
+
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            // Calm desktop-like backdrop so the dark overlay stands out.
+            var background = new LinearGradientBrush(
+                (Color)ColorConverter.ConvertFromString("#5E7194"),
+                (Color)ColorConverter.ConvertFromString("#2D3A56"), 45);
+            dc.DrawRectangle(background, null, new Rect(0, 0, width, height));
+
+            var typeface = new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal, FontWeights.SemiBold, FontStretches.Normal);
+            double x = pad;
+            for (int i = 0; i < parts.Length; i++)
+            {
+                var caption = new FormattedText(parts[i].Caption, System.Globalization.CultureInfo.CurrentCulture,
+                    FlowDirection.LeftToRight, typeface, 14, Brushes.White, dpi / 96);
+                dc.DrawText(caption, new Point(x + 6, pad));
+                dc.DrawImage(parts[i].Image, new Rect(new Point(x, pad + captionHeight), sizes[i]));
+                x += sizes[i].Width + gap;
+            }
+        }
+
+        var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap(
+            (int)Math.Ceiling(width * dpi / 96), (int)Math.Ceiling(height * dpi / 96), dpi, dpi, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        using var file = System.IO.File.Create(path);
+        encoder.Save(file);
     }
 
     // ───────────────────────── Shutdown ─────────────────────────
