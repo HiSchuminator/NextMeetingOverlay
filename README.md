@@ -29,8 +29,14 @@ Der ICS-Link wird mit Windows DPAPI verschlüsselt gespeichert und funktioniert 
 
 ## Installation
 
-Unter [Releases](../../releases) die `NextMeetingOverlay.exe` herunterladen und starten. Keine Installation, kein .NET nötig (portable, self-contained).
-Einstellungen landen im Ordner `NextMeetingOverlay-Daten` neben der Exe. Autostart: Rechtsklick → „Mit Windows starten“.
+Unter [Releases](../../releases) eine der beiden Dateien herunterladen und starten – keine Installation nötig:
+
+| Datei | Größe | Wann nehmen? |
+|---|---|---|
+| `NextMeetingOverlay.exe` | ca. 69 MB | Läuft auf jedem Windows-PC, .NET ist eingebaut. **Im Zweifel diese.** |
+| `NextMeetingOverlay-klein.exe` | ca. 1 MB | Wenn die [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) schon installiert ist. Fehlt sie, zeigt Windows beim Start einen Download-Link. |
+
+Beide können dasselbe. Einstellungen landen im Ordner `NextMeetingOverlay-Daten` neben der Exe – ein Wechsel zwischen den Varianten ist ohne Einstellungsverlust möglich (Datei in denselben Ordner legen). Autostart: Rechtsklick → „Mit Windows starten“.
 
 ## Selbst bauen
 
@@ -40,7 +46,13 @@ Voraussetzung: .NET 8 SDK (Windows).
 dotnet publish -c Release -p:Portable=true -o portable
 ```
 
-Ohne `-p:Portable=true` entsteht eine kleine Exe (< 1 MB), die eine installierte .NET-8-Desktop-Laufzeit braucht und ihre Einstellungen unter `%APPDATA%\NextMeetingOverlay` ablegt.
+Kleine portable Variante (< 1 MB, braucht die installierte .NET-8-Desktop-Laufzeit):
+
+```bash
+dotnet publish -c Release -p:Portable=true -p:SelfContained=false -p:EnableCompressionInSingleFile=false -o portable-klein
+```
+
+Ganz ohne `-p:Portable=true` entsteht eine Exe, die ihre Einstellungen unter `%APPDATA%\NextMeetingOverlay` statt neben der Exe ablegt.
 `--profile <name>` startet eine getrennte Instanz mit eigenen Einstellungen (zum Testen).
 `--demo-screenshot docs/screenshot.png` erzeugt das Bild oben neu – mit erfundenen Beispielterminen, ohne Kalenderzugriff.
 
