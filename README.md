@@ -16,7 +16,7 @@ Kleines Windows-Overlay, das den nächsten Outlook-Termin anzeigt – als unauff
 - **Bei Bildschirmfreigabe unsichtbar:** In Teams-/Zoom-Freigaben und auf Screenshots sehen andere das Overlay nicht – du schon
 - **Bei Vollbild/Präsentation** automatisch ausgeblendet
 - **Tastenkürzel** (Strg+Alt+Umschalt + O/J/A/K): ein/aus, beitreten, Aufnahme, Klick-durch-Modus
-- **Optional: [JohnnyAI](https://github.com/HiSchuminator/JohnnyAI)-Steuerung** – Aufnahme mit dem Termin verknüpft starten/stoppen, Aufnahmestatus in der Pille, bei Terminbeginn anbieten oder automatisch starten
+- **Optional: [JohnnyAI](https://github.com/HiSchuminator/JohnnyAI)-Steuerung** – Aufnahme mit dem Termin verknüpft starten/stoppen, Aufnahmestatus in der Pille, bei Terminbeginn anbieten oder automatisch starten. Ist JohnnyAI nicht installiert, blendet das Overlay Menü, Knopf und Tastenkürzel dafür automatisch aus.
 
 ## Kalenderquellen
 

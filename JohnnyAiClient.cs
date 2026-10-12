@@ -21,14 +21,64 @@ public static class JohnnyAiClient
     private static readonly Encoding Utf8 = new UTF8Encoding(false);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
+    /// <summary>NEXTMEETINGOVERLAY_JOHNNY=off simulates a PC without JohnnyAI (testing).</summary>
+    public static readonly bool Disabled =
+        string.Equals(Environment.GetEnvironmentVariable("NEXTMEETINGOVERLAY_JOHNNY"), "off", StringComparison.OrdinalIgnoreCase);
+
     public static bool IsRunning
     {
         get
         {
+            if (Disabled) return false;
             var processes = Process.GetProcessesByName("JohnnyAI");
             foreach (var p in processes) p.Dispose();
             return processes.Length > 0;
         }
+    }
+
+    private static bool? _installedCache;
+    private static DateTime _installedCheckedAt;
+
+    /// <summary>
+    /// JohnnyAI is present on this PC: running, has its data folder (created on first use),
+    /// or is registered as installed. Without it the overlay hides all JohnnyAI UI.
+    /// Cached for a minute - checked from the 2-second status poll.
+    /// </summary>
+    public static bool IsInstalled
+    {
+        get
+        {
+            if (_installedCache is bool cached && DateTime.Now - _installedCheckedAt < TimeSpan.FromMinutes(1))
+                return cached;
+            _installedCache = IsRunning || DetectInstallation();
+            _installedCheckedAt = DateTime.Now;
+            return _installedCache.Value;
+        }
+    }
+
+    private static bool DetectInstallation()
+    {
+        if (Disabled) return false;
+        try
+        {
+            var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "JohnnyAI");
+            if (Directory.Exists(dataDir)) return true;
+
+            foreach (var root in new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine })
+            {
+                using var uninstall = root.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall");
+                if (uninstall == null) continue;
+                foreach (var name in uninstall.GetSubKeyNames())
+                {
+                    using var entry = uninstall.OpenSubKey(name);
+                    if (entry?.GetValue("DisplayName") is string display &&
+                        display.StartsWith("JohnnyAI", StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+            }
+        }
+        catch { /* treat as not installed */ }
+        return false;
     }
 
     /// <summary>Null when JohnnyAI is not running or is an older version without the control pipe.</summary>

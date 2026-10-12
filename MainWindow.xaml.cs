@@ -68,6 +68,7 @@ public partial class MainWindow : Window
     private bool _autoExpanded;
 
     private bool _johnnyRunning;
+    private bool _johnnyAvailable = (Demo.Active && !JohnnyAiClient.Disabled) || JohnnyAiClient.IsInstalled;   // false -> no JohnnyAI UI at all
     private JohnnyStatus? _johnny;       // null = not running or JohnnyAI without control pipe
     private bool _johnnyPolling;
     private Meeting? _balloonMeeting;    // meeting a "start recording?" balloon refers to
@@ -421,7 +422,8 @@ public partial class MainWindow : Window
 
         panel.Children.Add(new TextBlock
         {
-            Text = $"Doppelklick: Outlook öffnen · Rechtsklick: Einstellungen\n{HotkeyHint}+O ein/aus · +J beitreten · +A Aufnahme · +K Klick-durch",
+            Text = $"Doppelklick: Outlook öffnen · Rechtsklick: Einstellungen\n{HotkeyHint}+O ein/aus · +J beitreten"
+                   + (_johnnyAvailable ? " · +A Aufnahme" : "") + " · +K Klick-durch",
             Foreground = Brushes.Gray,
             FontSize = 11,
             Margin = new Thickness(0, 8, 0, 0),
@@ -456,8 +458,8 @@ public partial class MainWindow : Window
     {
         if (Demo.Active)
         {
-            _johnnyRunning = true;
-            _johnny = Demo.Johnny;
+            _johnnyRunning = !JohnnyAiClient.Disabled;
+            _johnny = _johnnyRunning ? Demo.Johnny : null;
             UpdateJohnnyButton(_shown, DateTime.Now);
             return;
         }
@@ -468,6 +470,15 @@ public partial class MainWindow : Window
             _johnnyRunning = JohnnyAiClient.IsRunning;
             _johnny = _johnnyRunning ? await JohnnyAiClient.GetStatusAsync() : null;
             HandleMeetingStart();
+
+            // JohnnyAI installed/removed meanwhile: show or hide its menu, hint and hotkey.
+            bool available = _johnnyRunning || JohnnyAiClient.IsInstalled;
+            if (available != _johnnyAvailable)
+            {
+                _johnnyAvailable = available;
+                _toolTipKey = null;
+                RegisterHotkeys();
+            }
         }
         finally
         {
@@ -670,7 +681,7 @@ public partial class MainWindow : Window
         const uint mods = NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT;
         var failed = new List<string>();
         foreach (var (id, key) in new[] { (HotkeyToggle, 'O'), (HotkeyJoin, 'J'), (HotkeyJohnny, 'A'), (HotkeyClickThrough, 'K') })
-            if (!NativeMethods.RegisterHotKey(_hwnd, id, mods, key))
+            if ((id != HotkeyJohnny || _johnnyAvailable) && !NativeMethods.RegisterHotKey(_hwnd, id, mods, key))
                 failed.Add($"{HotkeyHint}+{key}");
         if (failed.Count > 0)
             Dispatcher.BeginInvoke(() => ShowInfo("Bereits von einem anderen Programm belegt: " + string.Join(", ", failed)),
@@ -873,6 +884,7 @@ public partial class MainWindow : Window
         menu.Items.Add(hide);
 
         var johnny = new MenuItem { Header = "JohnnyAI" };
+        _johnnyMenu = johnny;
         johnny.Items.Add(Check("Aufnahmeknopf anzeigen", () => _s.ShowJohnnyButton, () => _s.ShowJohnnyButton = !_s.ShowJohnnyButton));
         johnny.Items.Add(new Separator());
         johnny.Items.Add(Check("Bei Terminbeginn: nichts tun", () => _s.JohnnyStart == JohnnyStartMode.Off, () => _s.JohnnyStart = JohnnyStartMode.Off));
@@ -902,7 +914,8 @@ public partial class MainWindow : Window
         visibility.Items.Add(Check("Bei Bildschirmfreigabe unsichtbar (Teams, Zoom, Screenshots)", () => _s.HideFromScreenShare, () => _s.HideFromScreenShare = !_s.HideFromScreenShare));
         visibility.Items.Add(Check("Bei Vollbild und Präsentationen ausblenden", () => _s.HideInFullscreen, () => _s.HideInFullscreen = !_s.HideInFullscreen));
         visibility.Items.Add(Check($"Klick-durch-Modus ({HotkeyHint}+K)", () => _s.ClickThrough, () => _s.ClickThrough = !_s.ClickThrough));
-        visibility.Items.Add(Check($"Tastenkürzel ({HotkeyHint}+O/J/A/K)", () => _s.HotkeysEnabled, () => _s.HotkeysEnabled = !_s.HotkeysEnabled));
+        _hotkeyItem = Check(HotkeyMenuHeader(), () => _s.HotkeysEnabled, () => _s.HotkeysEnabled = !_s.HotkeysEnabled);
+        visibility.Items.Add(_hotkeyItem);
         menu.Items.Add(visibility);
 
         menu.Items.Add(Check("Mit Windows starten", () => Autostart.IsEnabled, () => Autostart.Set(!Autostart.IsEnabled)));
@@ -914,9 +927,16 @@ public partial class MainWindow : Window
         {
             foreach (var (item, isChecked) in _checkItems) item.IsChecked = isChecked();
             _keywordItem.Header = KeywordHeader();
+            _johnnyMenu.Visibility = _johnnyAvailable ? Visibility.Visible : Visibility.Collapsed;
+            _hotkeyItem.Header = HotkeyMenuHeader();
         };
         return menu;
     }
+
+    private MenuItem _johnnyMenu = null!;
+    private MenuItem _hotkeyItem = null!;
+
+    private string HotkeyMenuHeader() => $"Tastenkürzel ({HotkeyHint}+O/J{(_johnnyAvailable ? "/A" : "")}/K)";
 
     private string KeywordHeader()
     {
