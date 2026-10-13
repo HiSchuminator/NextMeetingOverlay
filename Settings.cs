@@ -11,6 +11,29 @@ namespace NextMeetingOverlay;
 
 public enum DockMode { Free, TopLeft, TopCenter, TopRight }
 
+public enum CalendarKind { Outlook, Ics }
+
+/// <summary>One calendar: the classic Outlook default calendar (COM) or a published ICS link.</summary>
+public sealed class CalendarSource
+{
+    public string Name { get; set; } = "Kalender";
+    public CalendarKind Kind { get; set; } = CalendarKind.Ics;
+    public bool Enabled { get; set; } = true;
+    public string? UrlProtected { get; set; }
+
+    [JsonIgnore]
+    public string? Url
+    {
+        get => Settings.Unprotect(UrlProtected);
+        set => UrlProtected = Settings.Protect(value);
+    }
+
+    [JsonIgnore]
+    public string KindLabel => Kind == CalendarKind.Outlook ? "klassisches Outlook" : "Kalender-Link";
+
+    public CalendarSource Copy() => (CalendarSource)MemberwiseClone();
+}
+
 /// <summary>What happens with JohnnyAI when a meeting begins.</summary>
 public enum JohnnyStartMode { Off, Ask, Auto }
 
@@ -61,30 +84,39 @@ public sealed class Settings
     public bool ClickThrough { get; set; } = false;
     public bool HotkeysEnabled { get; set; } = true;
 
-    // Calendar source: empty = classic Outlook via COM, otherwise a published ICS link.
-    public string? IcsUrlProtected { get; set; }
+    /// <summary>All calendars whose meetings are merged into one view.</summary>
+    public List<CalendarSource> Calendars { get; set; } = new();
     public int IcsRefreshMinutes { get; set; } = 5;
 
-    /// <summary>The ICS link is a secret (anyone with it can read the calendar) -> DPAPI, current user.</summary>
-    [JsonIgnore]
-    public string? IcsUrl
+    /// <summary>Single ICS link of versions ≤ 1.2.1 - only read to migrate it into <see cref="Calendars"/>.</summary>
+    public string? IcsUrlProtected { get; set; }
+
+    private void Migrate()
     {
-        get
+        if (Calendars.Count == 0)
         {
-            if (string.IsNullOrEmpty(IcsUrlProtected)) return null;
-            try
-            {
-                var bytes = ProtectedData.Unprotect(Convert.FromBase64String(IcsUrlProtected), null, DataProtectionScope.CurrentUser);
-                return Encoding.UTF8.GetString(bytes);
-            }
-            catch { return null; }
+            Calendars.Add(string.IsNullOrEmpty(IcsUrlProtected)
+                ? new CalendarSource { Name = "Outlook", Kind = CalendarKind.Outlook }
+                : new CalendarSource { Name = "Kalender", Kind = CalendarKind.Ics, UrlProtected = IcsUrlProtected });
         }
-        set
+        IcsUrlProtected = null;
+    }
+
+    /// <summary>Calendar links are secrets (anyone with one can read the calendar) -> DPAPI, current user.</summary>
+    internal static string? Protect(string? plain) =>
+        string.IsNullOrWhiteSpace(plain)
+            ? null
+            : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(plain.Trim()), null, DataProtectionScope.CurrentUser));
+
+    internal static string? Unprotect(string? protectedValue)
+    {
+        if (string.IsNullOrEmpty(protectedValue)) return null;
+        try
         {
-            IcsUrlProtected = string.IsNullOrWhiteSpace(value)
-                ? null
-                : Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(value.Trim()), null, DataProtectionScope.CurrentUser));
+            var bytes = ProtectedData.Unprotect(Convert.FromBase64String(protectedValue), null, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(bytes);
         }
+        catch { return null; }   // e.g. settings copied from another PC/user
     }
 
     /// <summary>"--profile name" runs a separate instance with its own settings (testing).</summary>
@@ -124,13 +156,16 @@ public sealed class Settings
 
     public static Settings Load()
     {
+        Settings? settings = null;
         try
         {
             if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Options) ?? new Settings();
+                settings = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Options);
         }
         catch { /* corrupt file -> defaults */ }
-        return new Settings();
+        settings ??= new Settings();
+        settings.Migrate();
+        return settings;
     }
 
     public void Save()

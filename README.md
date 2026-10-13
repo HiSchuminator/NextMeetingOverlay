@@ -18,14 +18,18 @@ Kleines Windows-Overlay, das den nächsten Outlook-Termin anzeigt – als unauff
 - **Tastenkürzel** (Strg+Alt+Umschalt + O/J/A/K): ein/aus, beitreten, Aufnahme, Klick-durch-Modus
 - **Optional: [JohnnyAI](https://github.com/HiSchuminator/JohnnyAI)-Steuerung** – Aufnahme mit dem Termin verknüpft starten/stoppen, Aufnahmestatus in der Pille, bei Terminbeginn anbieten oder automatisch starten. Ist JohnnyAI nicht installiert, blendet das Overlay Menü, Knopf und Tastenkürzel dafür automatisch aus.
 
-## Kalenderquellen
+## Kalender
 
-| Outlook | Einrichtung |
+Rechtsklick → **Kalender …**: beliebig viele Kalender eintragen, einzeln ein- und ausschalten. Die Termine aller eingeschalteten Kalender werden zusammen angezeigt; steht derselbe Termin in mehreren Kalendern, erscheint er nur einmal. Bei mehr als einem Kalender steht dessen Name beim Termin (z. B. „Arbeit“, „Privat“). Ist ein Kalender nicht erreichbar, laufen die anderen weiter – der Hinweis steht im Tooltip.
+
+| Kalender | Einrichtung |
 |---|---|
-| Klassisches Outlook | nichts zu tun – das Overlay liest den geöffneten Kalender direkt (COM) |
-| Neues Outlook / Outlook im Web | ICS-Link hinterlegen: Outlook → Einstellungen → Kalender → Freigegebene Kalender → „Kalender veröffentlichen“ → ICS-Link kopieren → im Overlay Rechtsklick → **Kalenderquelle …** |
+| Klassisches Outlook | „Klassisches Outlook hinzufügen“ – das Overlay liest den geöffneten Standardkalender direkt (COM) |
+| Neues Outlook / Outlook im Web | „Kalender-Link hinzufügen“: Outlook → Einstellungen → Kalender → Freigegebene Kalender → „Kalender veröffentlichen“ → ICS-Link kopieren |
+| Google Kalender | „Kalender-Link hinzufügen“: Einstellungen → Kalender → „Geheime Adresse im iCal-Format“ |
+| iCloud | „Kalender-Link hinzufügen“: Kalender teilen → „Öffentlicher Kalender“ → Link kopieren |
 
-Der ICS-Link wird mit Windows DPAPI verschlüsselt gespeichert und funktioniert nur unter dem Windows-Konto, das ihn eingetragen hat. Wer den Link kennt, kann den Kalender lesen – nicht weitergeben.
+Kalender-Links werden mit Windows DPAPI verschlüsselt gespeichert und funktionieren nur unter dem Windows-Konto, das sie eingetragen hat. Wer einen Link kennt, kann den Kalender lesen – nicht weitergeben.
 
 ## Installation
 

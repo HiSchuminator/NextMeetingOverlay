@@ -40,7 +40,6 @@ public partial class MainWindow : Window
 
     private readonly Settings _s = Settings.Load();
     private readonly OutlookReader _reader = new();
-    private readonly IcsCalendarSource _ics = new();
     private readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _refreshTimer = new();
     private readonly DispatcherTimer _johnnyTimer = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -140,26 +139,42 @@ public partial class MainWindow : Window
         try
         {
             var snapshot = _s.Clone();
-            var icsUrl = _s.IcsUrl;
-            _meetings = string.IsNullOrWhiteSpace(icsUrl)
-                ? await _reader.Run(() => _reader.ReadMeetings(snapshot))
-                : await _ics.ReadAsync(snapshot, icsUrl);
-            _status = null;
-        }
-        catch (OutlookNotRunningException)
-        {
-            _meetings = new();
-            _status = IsNewOutlookRunning()
-                ? "Neues Outlook: bitte Kalender-Link hinterlegen (Rechtsklick → Kalenderquelle)"
-                : "Outlook ist nicht geöffnet – bitte Outlook starten";
-        }
-        catch (Exception ex)
-        {
-            // Keep showing the last known meetings on transient errors (Outlook busy, network).
-            if (_meetings.Count == 0)
-                _status = ex is HttpRequestException or TaskCanceledException
-                    ? "Kalender-Link nicht erreichbar: " + ex.Message
-                    : "Kalender-Fehler: " + ex.Message;
+            var sources = snapshot.Calendars.Where(c => c.Enabled).ToList();
+            if (sources.Count == 0)
+            {
+                _meetings = new();
+                _calendarErrors = new();
+                _status = "Kein Kalender aktiv (Rechtsklick → Kalender …)";
+                return;
+            }
+
+            // All calendars in parallel; one failing calendar must not hide the others.
+            var results = await Task.WhenAll(sources.Select(src => ReadCalendarAsync(src, snapshot)));
+
+            bool showNames = sources.Count > 1;
+            var merged = results
+                .Where(r => r.Meetings != null)
+                .SelectMany(r => r.Meetings!.Select(m => m with { CalendarName = showNames ? r.Source.Name : "" }))
+                .ToList();
+            _calendarErrors = results.Where(r => r.Error != null).Select(r => $"{r.Source.Name}: {r.Error}").ToList();
+
+            if (results.Any(r => r.Meetings != null))
+            {
+                _meetings = Deduplicate(merged);
+                _status = null;
+            }
+            else if (results.All(r => r.NotRunning))
+            {
+                _meetings = new();
+                _status = IsNewOutlookRunning()
+                    ? "Neues Outlook: bitte Kalender-Link hinterlegen (Rechtsklick → Kalender …)"
+                    : "Outlook ist nicht geöffnet – bitte Outlook starten";
+            }
+            else if (_meetings.Count == 0)
+            {
+                // Keep showing the last known meetings on transient errors (Outlook busy, network).
+                _status = results.Length == 1 ? "Kalender-Fehler: " + results[0].Error : "Kein Kalender erreichbar";
+            }
         }
         finally
         {
@@ -167,6 +182,55 @@ public partial class MainWindow : Window
             _toolTipKey = null;
             UpdateDisplay();
         }
+    }
+
+    private List<string> _calendarErrors = new();
+    private readonly Dictionary<string, IcsCalendarSource> _icsSources = new();
+
+    private sealed record CalendarResult(CalendarSource Source, List<Meeting>? Meetings, string? Error, bool NotRunning = false);
+
+    private async Task<CalendarResult> ReadCalendarAsync(CalendarSource source, Settings snapshot)
+    {
+        try
+        {
+            if (source.Kind == CalendarKind.Outlook)
+                return new(source, await _reader.Run(() => _reader.ReadMeetings(snapshot)), null);
+
+            var url = source.Url;
+            if (string.IsNullOrWhiteSpace(url))
+                return new(source, null, "kein Link hinterlegt (auf einem anderen PC eingetragen?)");
+            if (!_icsSources.TryGetValue(url, out var ics))
+                _icsSources[url] = ics = new IcsCalendarSource();   // own download cache per link
+            return new(source, await ics.ReadAsync(snapshot, url), null);
+        }
+        catch (OutlookNotRunningException)
+        {
+            return new(source, null, "Outlook ist nicht geöffnet", NotRunning: true);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return new(source, null, "Link nicht erreichbar");
+        }
+        catch (Exception ex)
+        {
+            return new(source, null, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The same meeting often sits in two calendars (e.g. work calendar + shared team calendar):
+    /// same start, end and subject = one entry. The copy with a join link wins.
+    /// </summary>
+    private static List<Meeting> Deduplicate(IEnumerable<Meeting> meetings) =>
+        meetings
+            .GroupBy(m => (m.Start, m.End, m.Subject.Trim().ToLowerInvariant()))
+            .Select(g => g.OrderByDescending(m => m.JoinUrl != null).First())
+            .OrderBy(m => m.Start).ThenBy(m => m.End)
+            .ToList();
+
+    private void InvalidateCalendarCaches()
+    {
+        foreach (var ics in _icsSources.Values) ics.Invalidate();
     }
 
     private static bool IsNewOutlookRunning()
@@ -239,8 +303,8 @@ public partial class MainWindow : Window
             TimeText.Visibility = Visibility.Visible;
             TimeText.Text = $"{range} · {relative}";
             SubjectText.Text = subject;
-            LocationText.Text = main.Location;
-            LocationText.Visibility = main.Location.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            LocationText.Text = WithCalendar(main.Location, main);
+            LocationText.Visibility = LocationText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
             UpdateOverlapRows(overlaps, now);
 
             var followUp = upcoming.Skip(1).FirstOrDefault(m => m.Start >= main.Start && !overlaps.Contains(m));
@@ -384,16 +448,22 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Appends the calendar name ("Raum 2.04 · Privat") when several calendars are active.</summary>
+    private static string WithCalendar(string text, Meeting m) =>
+        m.CalendarName.Length == 0 ? text
+        : text.Length == 0 ? m.CalendarName
+        : $"{text} · {m.CalendarName}";
+
     /// <summary>Hover card: the shown meeting plus the rest of today including free gaps.</summary>
     private void UpdateToolTip(Meeting main, List<Meeting> upcoming, string range, DateTime now)
     {
-        string key = $"{now:yyyyMMddHHmm}|{main.Key}|{upcoming.Count}|{_s.ShowDayOverview}";
+        string key = $"{now:yyyyMMddHHmm}|{main.Key}|{upcoming.Count}|{_s.ShowDayOverview}|{string.Join(";", _calendarErrors)}";
         if (key == _toolTipKey) return;
         _toolTipKey = key;
 
         var panel = new StackPanel { MaxWidth = 440 };
         panel.Children.Add(new TextBlock { Text = main.Subject, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-        panel.Children.Add(new TextBlock { Text = range + (main.Location.Length > 0 ? " · " + main.Location : ""), TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new TextBlock { Text = WithCalendar(range + (main.Location.Length > 0 ? " · " + main.Location : ""), main), TextWrapping = TextWrapping.Wrap });
 
         if (_s.ShowDayOverview)
         {
@@ -409,7 +479,8 @@ public partial class MainWindow : Window
                         panel.Children.Add(new TextBlock { Text = $"        {FormatSpan(gap)} frei", Foreground = Brushes.SeaGreen, FontStyle = FontStyles.Italic });
                     panel.Children.Add(new TextBlock
                     {
-                        Text = $"{m.Start:HH:mm}–{m.End:HH:mm}  {m.Subject}" + (m.JoinUrl != null ? "  (online)" : ""),
+                        Text = $"{m.Start:HH:mm}–{m.End:HH:mm}  {m.Subject}" + (m.JoinUrl != null ? "  (online)" : "")
+                               + (m.CalendarName.Length > 0 ? $"  · {m.CalendarName}" : ""),
                         TextTrimming = TextTrimming.CharacterEllipsis,
                         FontWeight = m == main ? FontWeights.SemiBold : FontWeights.Normal,
                     });
@@ -419,6 +490,15 @@ public partial class MainWindow : Window
                     panel.Children.Add(new TextBlock { Text = $"Ab {cursor:HH:mm} frei", Foreground = Brushes.SeaGreen, FontStyle = FontStyles.Italic });
             }
         }
+
+        if (_calendarErrors.Count > 0)
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Nicht erreichbar – " + string.Join(" · ", _calendarErrors),
+                Foreground = Brushes.DarkOrange,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 8, 0, 0),
+            });
 
         panel.Children.Add(new TextBlock
         {
@@ -860,8 +940,8 @@ public partial class MainWindow : Window
     {
         var menu = new ContextMenu();
         menu.Items.Add(Item("In Outlook öffnen", OpenInOutlook));
-        menu.Items.Add(Item("Jetzt aktualisieren", () => { _ics.Invalidate(); _ = RefreshAsync(); }));
-        menu.Items.Add(Item("Kalenderquelle …", EditCalendarSource));
+        menu.Items.Add(Item("Jetzt aktualisieren", () => { InvalidateCalendarCaches(); _ = RefreshAsync(); }));
+        menu.Items.Add(Item("Kalender …", EditCalendars));
         menu.Items.Add(new Separator());
 
         var position = new MenuItem { Header = "Position" };
@@ -985,23 +1065,176 @@ public partial class MainWindow : Window
         _ = RefreshAsync();
     }
 
-    private void EditCalendarSource()
+    /// <summary>
+    /// Manage the calendar list: add/edit/remove ICS links, add the classic Outlook calendar,
+    /// switch single calendars on/off. Works on a copy; applied on "Speichern".
+    /// </summary>
+    private void EditCalendars()
     {
-        var text = ShowTextDialog("Kalenderquelle",
-            "Leer lassen: Termine direkt aus dem klassischen Outlook lesen.\n\n" +
-            "Für das neue Outlook (oder wenn das klassische nicht erreichbar ist) den ICS-Link deines Kalenders einfügen:\n" +
-            "Outlook im Web → Einstellungen → Kalender → Freigegebene Kalender → „Kalender veröffentlichen“ → " +
-            "Kalender wählen, „Kann alle Details anzeigen“ (oder „Kann Titel und Orte anzeigen“) → Veröffentlichen → ICS-Link kopieren.\n\n" +
-            "Wer diesen Link kennt, kann den Kalender lesen. Er wird hier nur verschlüsselt für deinen Windows-Benutzer gespeichert.",
-            _s.IcsUrl ?? "", multiline: false);
-        if (text == null) return;
-        _s.IcsUrl = text;
+        var working = _s.Calendars.Select(c => c.Copy()).ToList();
+
+        var list = new ListBox { Height = 190, Margin = new Thickness(0, 0, 0, 10) };
+        var addLink = new Button { Content = "Kalender-Link hinzufügen …", Margin = new Thickness(0, 0, 0, 6), Padding = new Thickness(8, 3, 8, 3) };
+        var addOutlook = new Button { Content = "Klassisches Outlook hinzufügen", Margin = new Thickness(0, 0, 0, 6), Padding = new Thickness(8, 3, 8, 3) };
+        var edit = new Button { Content = "Bearbeiten …", Margin = new Thickness(0, 0, 0, 6), Padding = new Thickness(8, 3, 8, 3) };
+        var remove = new Button { Content = "Entfernen", Padding = new Thickness(8, 3, 8, 3) };
+        var save = new Button { Content = "Speichern", Width = 90, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+        var cancel = new Button { Content = "Abbrechen", Width = 90, IsCancel = true };
+
+        void Fill()
+        {
+            int selected = list.SelectedIndex;
+            list.Items.Clear();
+            foreach (var c in working)
+            {
+                var check = new CheckBox { IsChecked = c.Enabled, VerticalAlignment = VerticalAlignment.Center, ToolTip = "Kalender ein-/ausschalten" };
+                var source = c;
+                check.Checked += (_, _) => source.Enabled = true;
+                check.Unchecked += (_, _) => source.Enabled = false;
+                var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2) };
+                row.Children.Add(check);
+                row.Children.Add(new TextBlock { Text = c.Name, FontWeight = FontWeights.SemiBold, Margin = new Thickness(6, 0, 0, 0) });
+                string state = c.Kind == CalendarKind.Ics && string.IsNullOrEmpty(c.Url) ? " – Link fehlt" : "";
+                row.Children.Add(new TextBlock { Text = $"   {c.KindLabel}{state}", Foreground = Brushes.Gray });
+                list.Items.Add(row);
+            }
+            list.SelectedIndex = Math.Min(Math.Max(selected, working.Count > 0 ? 0 : -1), working.Count - 1);
+            addOutlook.IsEnabled = working.All(c => c.Kind != CalendarKind.Outlook);
+            edit.IsEnabled = remove.IsEnabled = working.Count > 0;
+        }
+
+        Window? dialog = null;
+        addLink.Click += (_, _) =>
+        {
+            var added = EditIcsCalendar(dialog!, new CalendarSource { Name = $"Kalender {working.Count + 1}" });
+            if (added == null) return;
+            working.Add(added);
+            Fill();
+            list.SelectedIndex = working.Count - 1;
+        };
+        addOutlook.Click += (_, _) =>
+        {
+            working.Add(new CalendarSource { Name = "Outlook", Kind = CalendarKind.Outlook });
+            Fill();
+            list.SelectedIndex = working.Count - 1;
+        };
+        edit.Click += (_, _) =>
+        {
+            int i = list.SelectedIndex;
+            if (i < 0) return;
+            if (working[i].Kind == CalendarKind.Ics)
+            {
+                var changed = EditIcsCalendar(dialog!, working[i].Copy());
+                if (changed != null) working[i] = changed;
+            }
+            else
+            {
+                var name = ShowTextDialog("Kalender umbenennen", "Name für das klassische Outlook:", working[i].Name, multiline: false);
+                if (!string.IsNullOrWhiteSpace(name)) working[i].Name = name.Trim();
+            }
+            Fill();
+        };
+        list.MouseDoubleClick += (_, _) => edit.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        remove.Click += (_, _) =>
+        {
+            int i = list.SelectedIndex;
+            if (i < 0) return;
+            working.RemoveAt(i);
+            Fill();
+        };
+
+        var buttons = new StackPanel { Margin = new Thickness(10, 0, 0, 0), Width = 210 };
+        foreach (var b in new[] { addLink, addOutlook, edit, remove }) buttons.Children.Add(b);
+        var body = new DockPanel();
+        DockPanel.SetDock(buttons, Dock.Right);
+        body.Children.Add(buttons);
+        body.Children.Add(list);
+
+        var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        footer.Children.Add(save);
+        footer.Children.Add(cancel);
+
+        var panel = new StackPanel { Margin = new Thickness(14) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Die Termine aller eingeschalteten Kalender werden zusammen angezeigt. " +
+                   "Steht ein Termin in mehreren Kalendern, erscheint er nur einmal.",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 10),
+        });
+        panel.Children.Add(body);
+        panel.Children.Add(footer);
+
+        dialog = new Window
+        {
+            Title = "Kalender",
+            Content = panel,
+            Width = 620,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ResizeMode = ResizeMode.NoResize,
+            Topmost = true,
+        };
+        save.Click += (_, _) => dialog.DialogResult = true;
+        Fill();
+        if (dialog.ShowDialog() != true) return;
+
+        _s.Calendars = working;
         _s.Save();
-        _ics.Invalidate();
+        _icsSources.Clear();
         _meetings = new();
         _status = "Lade Termine …";
         UpdateDisplay();
         _ = RefreshAsync();
+    }
+
+    /// <summary>Name + ICS link of one calendar. Returns null on cancel or when no link was entered.</summary>
+    private static CalendarSource? EditIcsCalendar(Window owner, CalendarSource source)
+    {
+        var name = new TextBox { Text = source.Name, Margin = new Thickness(0, 2, 0, 10) };
+        var url = new TextBox { Text = source.Url ?? "", Height = 60, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 2, 0, 10) };
+        var save = new Button { Content = "Übernehmen", Width = 100, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+        var cancel = new Button { Content = "Abbrechen", Width = 90, IsCancel = true };
+
+        var panel = new StackPanel { Margin = new Thickness(14) };
+        panel.Children.Add(new TextBlock { Text = "Name (wird beim Termin angezeigt, z. B. „Arbeit“ oder „Privat“):" });
+        panel.Children.Add(name);
+        panel.Children.Add(new TextBlock { Text = "ICS-Link des Kalenders:" });
+        panel.Children.Add(url);
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Outlook: Einstellungen → Kalender → Freigegebene Kalender → „Kalender veröffentlichen“ → Kalender wählen, " +
+                   "„Kann alle Details anzeigen“ → Veröffentlichen → ICS-Link kopieren.\n" +
+                   "Google Kalender: Einstellungen → Kalender → „Geheime Adresse im iCal-Format“.\n" +
+                   "iCloud: Kalender teilen → „Öffentlicher Kalender“ → Link kopieren.\n\n" +
+                   "Wer einen solchen Link kennt, kann den Kalender lesen. Er wird hier nur verschlüsselt für deinen Windows-Benutzer gespeichert.",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = Brushes.DimGray,
+            Margin = new Thickness(0, 0, 0, 10),
+        });
+        var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        footer.Children.Add(save);
+        footer.Children.Add(cancel);
+        panel.Children.Add(footer);
+
+        var dialog = new Window
+        {
+            Title = "Kalender-Link",
+            Content = panel,
+            Width = 520,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = owner,
+            ResizeMode = ResizeMode.NoResize,
+        };
+        save.Click += (_, _) => dialog.DialogResult = true;
+        dialog.Loaded += (_, _) => { url.Focus(); url.SelectAll(); };
+        if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(url.Text)) return null;
+
+        source.Name = string.IsNullOrWhiteSpace(name.Text) ? "Kalender" : name.Text.Trim();
+        source.Kind = CalendarKind.Ics;
+        source.Url = url.Text;
+        return source;
     }
 
     private static string? ShowTextDialog(string title, string intro, string initial, bool multiline)

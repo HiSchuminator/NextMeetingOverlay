@@ -8,7 +8,7 @@ public enum MeetingSource { Outlook, Ics }
 
 public sealed record Meeting(
     string Subject, DateTime Start, DateTime End, string Location,
-    string? JoinUrl, string EntryId, string StoreId, MeetingSource Source)
+    string? JoinUrl, string EntryId, string StoreId, MeetingSource Source, string CalendarName = "")
 {
     /// <summary>Identifies one occurrence (used to ask/auto-start JohnnyAI only once per meeting).</summary>
     public string Key => $"{Start:O}|{Subject}";
