@@ -322,7 +322,7 @@ public partial class MainWindow : Window
             else FollowUpText.Visibility = Visibility.Collapsed;
         }
 
-        JoinButton.Visibility = main.JoinUrl != null ? Visibility.Visible : Visibility.Collapsed;
+        JoinButton.Visibility = main.JoinUrl != null && !_joined.Contains(main.Key) ? Visibility.Visible : Visibility.Collapsed;
         JoinButton.ToolTip = $"Online-Meeting beitreten ({HotkeyHint}+J)";
         SkipButton.Visibility = Visibility.Visible;
         SkipButton.ToolTip = $"Nicht teilnehmen – „{main.Subject}“ im Overlay ausblenden\n(in Outlook bleibt der Termin unverändert, es geht keine Absage raus)";
@@ -389,7 +389,7 @@ public partial class MainWindow : Window
         MiniPill.Visibility = expanded ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private readonly List<(Meeting Meeting, TextBlock Text)> _overlapRows = new();
+    private readonly List<(Meeting Meeting, TextBlock Text, string RowKey)> _overlapRows = new();
 
     /// <summary>
     /// One row per meeting running in parallel to the main one, with its own join button.
@@ -398,8 +398,10 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateOverlapRows(List<Meeting> overlaps, DateTime now)
     {
+        // Rebuild when the meetings or their joined state change (join button disappears).
+        string RowKey(Meeting m) => m.Key + (_joined.Contains(m.Key) ? "|joined" : "");
         bool sameSet = overlaps.Count == _overlapRows.Count &&
-                       overlaps.Select(m => m.Key).SequenceEqual(_overlapRows.Select(r => r.Meeting.Key));
+                       overlaps.Select(RowKey).SequenceEqual(_overlapRows.Select(r => r.RowKey));
         if (!sameSet)
         {
             OverlapPanel.Children.Clear();
@@ -419,7 +421,7 @@ public partial class MainWindow : Window
                 };
                 grid.Children.Add(text);
 
-                if (m.JoinUrl != null)
+                if (m.JoinUrl != null && !_joined.Contains(m.Key))
                 {
                     var join = new Button
                     {
@@ -432,8 +434,8 @@ public partial class MainWindow : Window
                         Focusable = false,
                         ToolTip = $"„{m.Subject}“ beitreten",
                     };
-                    var url = m.JoinUrl;
-                    join.Click += (_, _) => Join(url);
+                    var meeting = m;
+                    join.Click += (_, _) => JoinMeeting(meeting);
                     Grid.SetColumn(join, 1);
                     grid.Children.Add(join);
                 }
@@ -444,12 +446,12 @@ public partial class MainWindow : Window
                 grid.Children.Add(skip);
 
                 OverlapPanel.Children.Add(grid);
-                _overlapRows.Add((m, text));
+                _overlapRows.Add((m, text, RowKey(m)));
             }
         }
 
         OverlapPanel.Visibility = _overlapRows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        foreach (var (m, text) in _overlapRows)
+        foreach (var (m, text, _) in _overlapRows)
         {
             string state = m.Start <= now ? "läuft" : $"in {FormatSpan(m.Start - now)}";
             text.Text = $"∥ {m.Start:HH:mm}–{m.End:HH:mm} {m.Subject} · {state}";
@@ -741,7 +743,18 @@ public partial class MainWindow : Window
 
     // ───────────────────────── Actions ─────────────────────────
 
-    private void OnJoinClick(object sender, RoutedEventArgs e) => Join(_shown?.JoinUrl);
+    private void OnJoinClick(object sender, RoutedEventArgs e) => JoinMeeting(_shown);
+
+    // Meetings joined via the overlay this session: their "Beitreten" button is hidden.
+    // Re-joining stays possible via hotkey or the context menu ("Erneut beitreten").
+    private readonly HashSet<string> _joined = new();
+
+    private void JoinMeeting(Meeting? meeting)
+    {
+        if (meeting?.JoinUrl == null) return;
+        Join(meeting.JoinUrl);
+        if (_joined.Add(meeting.Key)) UpdateDisplay();
+    }
 
     private static void Join(string? url)
     {
@@ -861,7 +874,7 @@ public partial class MainWindow : Window
                 SetUserHidden(!_userHidden);
                 break;
             case HotkeyJoin:
-                Join(_shown?.JoinUrl);
+                JoinMeeting(_shown);   // also re-joins when the button is already hidden
                 break;
             case HotkeyJohnny:
                 _ = ToggleJohnnyAsync();
@@ -1020,6 +1033,8 @@ public partial class MainWindow : Window
         menu.Items.Add(Item("In Outlook öffnen", OpenInOutlook));
         menu.Items.Add(Item("Jetzt aktualisieren", () => { InvalidateCalendarCaches(); _ = RefreshAsync(); }));
         menu.Items.Add(Item("Kalender …", EditCalendars));
+        _rejoinItem = Item("Erneut beitreten", () => JoinMeeting(_shown));
+        menu.Items.Add(_rejoinItem);
         _skipAllItem = Item("Ausgeblendete Termine wieder anzeigen", ShowSkippedMeetingsAgain);
         menu.Items.Add(_skipAllItem);
         menu.Items.Add(new Separator());
@@ -1088,6 +1103,9 @@ public partial class MainWindow : Window
             foreach (var (item, isChecked) in _checkItems) item.IsChecked = isChecked();
             _keywordItem.Header = KeywordHeader();
             _johnnyMenu.Visibility = _johnnyAvailable ? Visibility.Visible : Visibility.Collapsed;
+            _rejoinItem.Visibility = _shown != null && _shown.JoinUrl != null && _joined.Contains(_shown.Key)
+                ? Visibility.Visible : Visibility.Collapsed;
+            if (_shown != null) _rejoinItem.Header = $"Erneut beitreten: {_shown.Subject} ({HotkeyHint}+J)";
             int skipped = _s.SkippedMeetings.Count;
             _skipAllItem.Header = skipped > 0 ? $"Ausgeblendete Termine wieder anzeigen ({skipped})" : "Ausgeblendete Termine wieder anzeigen";
             _skipAllItem.IsEnabled = skipped > 0;
@@ -1098,6 +1116,7 @@ public partial class MainWindow : Window
 
     private MenuItem _johnnyMenu = null!;
     private MenuItem _skipAllItem = null!;
+    private MenuItem _rejoinItem = null!;
     private MenuItem _hotkeyItem = null!;
 
     private string HotkeyMenuHeader() => $"Tastenkürzel ({HotkeyHint}+O/J{(_johnnyAvailable ? "/A" : "")}/K)";
