@@ -46,7 +46,7 @@
 
     <Border x:Name="Card" Margin="6" CornerRadius="10" Background="#F01F2023"
             BorderBrush="#33FFFFFF" BorderThickness="1" Padding="10,8"
-            MinWidth="240" MaxWidth="460">
+            MinWidth="240" MaxWidth="560">
         <Border.Effect>
             <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.45"/>
         </Border.Effect>
@@ -79,6 +79,9 @@
                 <Button x:Name="JoinButton" Template="{StaticResource PillButton}" Content="Beitreten"
                         Background="#5B5FC7" BorderBrush="#5B5FC7"
                         Cursor="Hand" Focusable="False" Click="OnJoinClick"/>
+                <Button x:Name="SkipButton" Template="{StaticResource PillButton}" Content="✕"
+                        Background="Transparent" BorderBrush="#55FFFFFF" Margin="6,0,0,0"
+                        Cursor="Hand" Focusable="False" Click="OnSkipClick"/>
             </StackPanel>
         </Grid>
     </Border>

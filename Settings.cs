@@ -84,6 +84,12 @@ public sealed class Settings
     public bool ClickThrough { get; set; } = false;
     public bool HotkeysEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Meetings the user clicked away ("nicht teilnehmen"), as <see cref="Meeting.Key"/>.
+    /// Only hidden in the overlay - Outlook is not touched and no decline is sent.
+    /// </summary>
+    public List<string> SkippedMeetings { get; set; } = new();
+
     /// <summary>All calendars whose meetings are merged into one view.</summary>
     public List<CalendarSource> Calendars { get; set; } = new();
     public int IcsRefreshMinutes { get; set; } = 5;
@@ -100,6 +106,14 @@ public sealed class Settings
                 : new CalendarSource { Name = "Kalender", Kind = CalendarKind.Ics, UrlProtected = IcsUrlProtected });
         }
         IcsUrlProtected = null;
+
+        // Forget skipped meetings that are long over (key starts with the ISO start time).
+        SkippedMeetings.RemoveAll(key =>
+        {
+            var start = key.Split('|')[0];
+            return !DateTime.TryParse(start, null, System.Globalization.DateTimeStyles.RoundtripKind, out var when)
+                   || when < DateTime.Now.AddDays(-2);
+        });
     }
 
     /// <summary>Calendar links are secrets (anyone with one can read the calendar) -> DPAPI, current user.</summary>

@@ -37,6 +37,7 @@ public partial class MainWindow : Window
     private static readonly Brush Gray = Frozen("#80FFFFFF");
     private static readonly Brush DefaultBorder = Frozen("#33FFFFFF");
     private static readonly Brush JohnnyBorder = Frozen("#66FF5A5A");
+    private static readonly Brush SkipBorder = Frozen("#55FFFFFF");
 
     private readonly Settings _s = Settings.Load();
     private readonly OutlookReader _reader = new();
@@ -70,7 +71,7 @@ public partial class MainWindow : Window
     private bool _johnnyAvailable = (Demo.Active && !JohnnyAiClient.Disabled) || JohnnyAiClient.IsInstalled;   // false -> no JohnnyAI UI at all
     private JohnnyStatus? _johnny;       // null = not running or JohnnyAI without control pipe
     private bool _johnnyPolling;
-    private Meeting? _balloonMeeting;    // meeting a "start recording?" balloon refers to
+    private Func<Task>? _balloonAction;  // what a click on the current tray balloon does
 
     public MainWindow()
     {
@@ -245,7 +246,7 @@ public partial class MainWindow : Window
     private void UpdateDisplay()
     {
         var now = DateTime.Now;
-        var upcoming = _meetings.Where(m => m.End > now).ToList();
+        var upcoming = VisibleMeetings().Where(m => m.End > now).ToList();
         var main = upcoming.FirstOrDefault();
         _shown = main;
         _blink = !_blink;
@@ -264,6 +265,7 @@ public partial class MainWindow : Window
             LocationText.Visibility = Visibility.Collapsed;
             FollowUpText.Visibility = Visibility.Collapsed;
             JoinButton.Visibility = Visibility.Collapsed;
+            SkipButton.Visibility = Visibility.Collapsed;
             Card.ToolTip = "Rechtsklick: Einstellungen";
             SetTrayText(SubjectText.Text);
             return;
@@ -322,6 +324,8 @@ public partial class MainWindow : Window
 
         JoinButton.Visibility = main.JoinUrl != null ? Visibility.Visible : Visibility.Collapsed;
         JoinButton.ToolTip = $"Online-Meeting beitreten ({HotkeyHint}+J)";
+        SkipButton.Visibility = Visibility.Visible;
+        SkipButton.ToolTip = $"Nicht teilnehmen – „{main.Subject}“ im Overlay ausblenden\n(in Outlook bleibt der Termin unverändert, es geht keine Absage raus)";
 
         UpdateToolTip(main, upcoming, range, now);
         SetTrayText($"{main.Start:HH:mm} {subject} ({relative})");
@@ -366,7 +370,7 @@ public partial class MainWindow : Window
 
         // "+1": meetings overlapping the shown one (same rule as the parallel rows in the card).
         int overlapCount = main == null || !_s.ShowOverlaps ? 0
-            : _meetings.Count(m => m != main && m.End > now && m.Start >= main.Start && m.Start < main.End);
+            : VisibleMeetings().Count(m => m != main && m.End > now && m.Start >= main.Start && m.Start < main.End);
         MiniOverlapText.Text = $"+{overlapCount}";
         MiniOverlap.Visibility = overlapCount > 0 ? Visibility.Visible : Visibility.Collapsed;
 
@@ -434,6 +438,11 @@ public partial class MainWindow : Window
                     grid.Children.Add(join);
                 }
 
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                var skip = CreateSkipButton(m);
+                Grid.SetColumn(skip, 2);
+                grid.Children.Add(skip);
+
                 OverlapPanel.Children.Add(grid);
                 _overlapRows.Add((m, text));
             }
@@ -446,6 +455,64 @@ public partial class MainWindow : Window
             text.Text = $"∥ {m.Start:HH:mm}–{m.End:HH:mm} {m.Subject} · {state}";
             text.ToolTip = $"Parallel: {m.Subject} ({m.Start:HH:mm}–{m.End:HH:mm})";
         }
+    }
+
+    // ───────────────────────── Not attending (skip) ─────────────────────────
+
+    private IEnumerable<Meeting> VisibleMeetings() =>
+        _s.SkippedMeetings.Count == 0 ? _meetings : _meetings.Where(m => !_s.SkippedMeetings.Contains(m.Key));
+
+    /// <summary>
+    /// "Nicht teilnehmen": hides this one occurrence in the overlay (no ampel, no JohnnyAI prompt).
+    /// Outlook stays untouched - nothing is declined or sent to the organizer.
+    /// </summary>
+    private void SkipMeeting(Meeting meeting)
+    {
+        if (!_s.SkippedMeetings.Contains(meeting.Key)) _s.SkippedMeetings.Add(meeting.Key);
+        _johnnyHandled.Add(meeting.Key);
+        _s.Save();
+        _toolTipKey = null;
+        UpdateDisplay();
+        ShowActionBalloon("Termin ausgeblendet",
+            $"„{meeting.Subject}“ ({meeting.Start:HH:mm}) wird im Overlay nicht mehr angezeigt – in Outlook bleibt er unverändert.\nHier klicken zum Rückgängigmachen.",
+            () =>
+            {
+                _s.SkippedMeetings.Remove(meeting.Key);
+                _s.Save();
+                _toolTipKey = null;
+                UpdateDisplay();
+                return Task.CompletedTask;
+            }, timeoutMs: 8000);
+    }
+
+    private void ShowSkippedMeetingsAgain()
+    {
+        _s.SkippedMeetings.Clear();
+        _s.Save();
+        _toolTipKey = null;
+        UpdateDisplay();
+    }
+
+    private Button CreateSkipButton(Meeting meeting)
+    {
+        var button = new Button
+        {
+            Template = (ControlTemplate)FindResource("PillButton"),
+            Content = "✕",
+            Background = Brushes.Transparent,
+            BorderBrush = SkipBorder,
+            Margin = new Thickness(6, 0, 0, 0),
+            Cursor = Cursors.Hand,
+            Focusable = false,
+            ToolTip = $"Nicht teilnehmen – „{meeting.Subject}“ im Overlay ausblenden\n(in Outlook bleibt der Termin unverändert, es geht keine Absage raus)",
+        };
+        button.Click += (_, _) => SkipMeeting(meeting);
+        return button;
+    }
+
+    private void OnSkipClick(object sender, RoutedEventArgs e)
+    {
+        if (_shown != null) SkipMeeting(_shown);
     }
 
     /// <summary>Appends the calendar name ("Raum 2.04 · Privat") when several calendars are active.</summary>
@@ -587,9 +654,14 @@ public partial class MainWindow : Window
         }
         else
         {
-            _balloonMeeting = m;
-            _tray?.ShowBalloonTip(15000, "Termin beginnt – Aufnahme starten?",
-                $"{m.Subject}\nHier klicken oder ⏺ im Overlay, um JohnnyAI aufnehmen zu lassen.", Forms.ToolTipIcon.Info);
+            ShowActionBalloon("Termin beginnt – Aufnahme starten?",
+                $"{m.Subject}\nHier klicken oder ⏺ im Overlay, um JohnnyAI aufnehmen zu lassen.",
+                async () =>
+                {
+                    if (_johnny == null || _johnny.Recording) return;
+                    await StartJohnnyAsync(m);
+                    await PollJohnnyAsync();
+                });
         }
     }
 
@@ -719,7 +791,13 @@ public partial class MainWindow : Window
         catch { return false; }
     }
 
-    private void ShowInfo(string text) =>
+    private void ShowInfo(string text)
+    {
+        _balloonAction = null;   // a plain info balloon must not trigger an older balloon's action
+        ShowInfoBalloon(text);
+    }
+
+    private void ShowInfoBalloon(string text) =>
         _tray?.ShowBalloonTip(4000, "Nächster Termin", text, Forms.ToolTipIcon.Info);
 
     // ───────────────────────── Window flags, visibility, hotkeys ─────────────────────────
@@ -942,6 +1020,8 @@ public partial class MainWindow : Window
         menu.Items.Add(Item("In Outlook öffnen", OpenInOutlook));
         menu.Items.Add(Item("Jetzt aktualisieren", () => { InvalidateCalendarCaches(); _ = RefreshAsync(); }));
         menu.Items.Add(Item("Kalender …", EditCalendars));
+        _skipAllItem = Item("Ausgeblendete Termine wieder anzeigen", ShowSkippedMeetingsAgain);
+        menu.Items.Add(_skipAllItem);
         menu.Items.Add(new Separator());
 
         var position = new MenuItem { Header = "Position" };
@@ -1008,12 +1088,16 @@ public partial class MainWindow : Window
             foreach (var (item, isChecked) in _checkItems) item.IsChecked = isChecked();
             _keywordItem.Header = KeywordHeader();
             _johnnyMenu.Visibility = _johnnyAvailable ? Visibility.Visible : Visibility.Collapsed;
+            int skipped = _s.SkippedMeetings.Count;
+            _skipAllItem.Header = skipped > 0 ? $"Ausgeblendete Termine wieder anzeigen ({skipped})" : "Ausgeblendete Termine wieder anzeigen";
+            _skipAllItem.IsEnabled = skipped > 0;
             _hotkeyItem.Header = HotkeyMenuHeader();
         };
         return menu;
     }
 
     private MenuItem _johnnyMenu = null!;
+    private MenuItem _skipAllItem = null!;
     private MenuItem _hotkeyItem = null!;
 
     private string HotkeyMenuHeader() => $"Tastenkürzel ({HotkeyHint}+O/J{(_johnnyAvailable ? "/A" : "")}/K)";
@@ -1291,13 +1375,18 @@ public partial class MainWindow : Window
         };
         _tray.BalloonTipClicked += async (_, _) =>
         {
-            var meeting = _balloonMeeting;
-            _balloonMeeting = null;
-            if (meeting == null || _johnny == null || _johnny.Recording) return;
-            await StartJohnnyAsync(meeting);
-            await PollJohnnyAsync();
+            var action = _balloonAction;
+            _balloonAction = null;
+            if (action != null) await action();
         };
-        _tray.BalloonTipClosed += (_, _) => _balloonMeeting = null;
+        _tray.BalloonTipClosed += (_, _) => _balloonAction = null;
+    }
+
+    /// <summary>Balloon whose click runs an action (start recording, undo hiding a meeting).</summary>
+    private void ShowActionBalloon(string title, string text, Func<Task> onClick, int timeoutMs = 15000)
+    {
+        _balloonAction = onClick;
+        _tray?.ShowBalloonTip(timeoutMs, title, text, Forms.ToolTipIcon.Info);
     }
 
     private void SetTrayText(string text)
