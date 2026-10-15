@@ -66,6 +66,11 @@ public sealed class Settings
     public bool ShowDayOverview { get; set; } = true;
     public bool ShowOverlaps { get; set; } = true;
 
+    // Todos
+    public bool ShowTodos { get; set; } = true;
+    public bool TodoOutlookPrivate { get; set; } = true;
+    public bool TodoOutlookFree { get; set; } = true;
+
     // Mini mode: small traffic-light pill, details on hover/click
     public bool MiniMode { get; set; } = true;
     public bool AutoExpandAtStart { get; set; } = true;
@@ -137,6 +142,9 @@ public sealed class Settings
     public static string? Profile { get; set; }
 
     private static string Dir => Path.Combine(BaseDir.Value, Profile == null ? "" : "profiles\\" + Profile);
+
+    /// <summary>Folder of settings.json - other data files (todos.json) live next to it.</summary>
+    internal static string DataDirectory => Dir;
 
     /// <summary>
     /// Portable build: settings live in a folder next to the exe so they travel with it

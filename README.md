@@ -16,7 +16,9 @@ Kleines Windows-Overlay, das den nächsten Outlook-Termin anzeigt – als unauff
 - **Andocken** oben links / Mitte / rechts, auf jedem Monitor
 - **Bei Bildschirmfreigabe unsichtbar:** In Teams-/Zoom-Freigaben und auf Screenshots sehen andere das Overlay nicht – du schon
 - **Bei Vollbild/Präsentation** automatisch ausgeblendet
-- **Tastenkürzel** (Strg+Alt+Umschalt + O/J/A/K): ein/aus, beitreten, Aufnahme, Klick-durch-Modus
+- **Todos:** schnell festhalten, was du erledigen willst (＋ Todo oder Strg+Alt+Umschalt+N) – mit Erinnerung „nach diesem Termin“ oder zu einer Uhrzeit. Offene Todos zählt die Pille (`☐ 3`, orange wenn fällig), in der aufgeklappten Ansicht abhaken oder löschen (mit Rückgängig). Gespeichert lokal neben den Einstellungen.
+- **Todo als Outlook-Termin (📅):** erzeugt einen Erinnerungstermin – standardmäßig privat und als „frei“, mit Outlook-Erinnerung – und öffnet ihn in Outlook; dort Kalender wählen und speichern. Funktioniert ohne IT-Freigabe, auch mit dem neuen Outlook.
+- **Tastenkürzel** (Strg+Alt+Umschalt + O/J/A/N/K): ein/aus, beitreten, Aufnahme, Todo, Klick-durch-Modus
 - **Optional: [JohnnyAI](https://github.com/HiSchuminator/JohnnyAI)-Steuerung** – Aufnahme mit dem Termin verknüpft starten/stoppen, Aufnahmestatus in der Pille, bei Terminbeginn anbieten oder automatisch starten. Ist JohnnyAI nicht installiert, blendet das Overlay Menü, Knopf und Tastenkürzel dafür automatisch aus.
 
 ## Kalender

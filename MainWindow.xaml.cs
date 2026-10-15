@@ -26,7 +26,7 @@ public partial class MainWindow : Window
     private static readonly TimeSpan StartWindowAfter = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan MinFreeGap = TimeSpan.FromMinutes(10);
 
-    private const int HotkeyToggle = 1, HotkeyJoin = 2, HotkeyJohnny = 3, HotkeyClickThrough = 4;
+    private const int HotkeyToggle = 1, HotkeyJoin = 2, HotkeyJohnny = 3, HotkeyClickThrough = 4, HotkeyTodo = 5;
     private const string HotkeyHint = "Strg+Alt+Umschalt";
 
     private static readonly Brush Orange = Frozen("#FFB020");
@@ -253,6 +253,7 @@ public partial class MainWindow : Window
 
         UpdateJohnnyButton(main, now);
         UpdateMini(main, now);
+        UpdateTodos(now);
 
         if (main == null)
         {
@@ -459,6 +460,323 @@ public partial class MainWindow : Window
         }
     }
 
+    // ───────────────────────── Todos ─────────────────────────
+
+    private readonly List<TodoItem> _todos = Demo.Active ? Demo.Todos() : TodoStore.Load();
+    private string? _todoSignature;
+    private static readonly Brush TodoDueBrush = Frozen("#CCE08A1E");
+    private static readonly Brush TodoNormalBrush = Frozen("#33FFFFFF");
+
+    private void SaveTodos()
+    {
+        if (!Demo.Active) TodoStore.Save(_todos);
+        _todoSignature = null;
+        UpdateDisplay();
+    }
+
+    private List<TodoItem> OpenTodos() =>
+        _todos.Where(t => !t.Done)
+              .OrderByDescending(t => t.IsDue)
+              .ThenBy(t => t.RemindAt ?? DateTime.MaxValue)
+              .ThenBy(t => t.Created)
+              .ToList();
+
+    /// <summary>Counter in the pill + todo rows in the card; rows only rebuilt when something changed.</summary>
+    private void UpdateTodos(DateTime now)
+    {
+        CheckTodoReminders(now);
+        var open = OpenTodos();
+        bool anyDue = open.Any(t => t.IsDue);
+
+        MiniTodo.Visibility = _s.ShowTodos && open.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        MiniTodoText.Text = $"☐ {open.Count}";
+        MiniTodo.Background = anyDue ? TodoDueBrush : TodoNormalBrush;
+        MiniTodo.ToolTip = anyDue ? "Ein Todo ist fällig" : $"{open.Count} offene Todos";
+
+        TodoPanel.Visibility = _s.ShowTodos ? Visibility.Visible : Visibility.Collapsed;
+        if (!_s.ShowTodos) return;
+
+        string signature = string.Join(";", open.Select(t => $"{t.Id}|{t.Text}|{t.ReminderLabel}"));
+        if (signature == _todoSignature) return;
+        _todoSignature = signature;
+
+        TodoPanel.Children.Clear();
+        var header = new DockPanel { Margin = new Thickness(0, 0, 0, 2) };
+        var add = new Button
+        {
+            Template = (ControlTemplate)FindResource("PillButton"),
+            Content = "＋ Todo",
+            Background = Brushes.Transparent,
+            BorderBrush = SkipBorder,
+            Cursor = Cursors.Hand,
+            Focusable = false,
+            ToolTip = $"Todo hinzufügen ({HotkeyHint}+N)",
+        };
+        add.Click += (_, _) => AddTodo();
+        DockPanel.SetDock(add, Dock.Right);
+        header.Children.Add(add);
+        header.Children.Add(new TextBlock
+        {
+            Text = open.Count == 0 ? "Todos – nichts offen" : "Todos",
+            FontSize = 11,
+            Foreground = Gray,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        TodoPanel.Children.Add(header);
+
+        const int maxRows = 8;
+        foreach (var todo in open.Take(maxRows))
+            TodoPanel.Children.Add(CreateTodoRow(todo));
+        if (open.Count > maxRows)
+            TodoPanel.Children.Add(new TextBlock { Text = $"… und {open.Count - maxRows} weitere", FontSize = 11, Foreground = Gray });
+    }
+
+    private UIElement CreateTodoRow(TodoItem todo)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var check = new CheckBox { VerticalAlignment = VerticalAlignment.Center, Focusable = false, ToolTip = "Erledigt" };
+        check.Checked += (_, _) => CompleteTodo(todo);
+        grid.Children.Add(check);
+
+        var text = new TextBlock
+        {
+            Text = todo.Text,
+            FontSize = 12,
+            Foreground = Brushes.White,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 6, 0),
+            ToolTip = todo.Text,
+        };
+        Grid.SetColumn(text, 1);
+        grid.Children.Add(text);
+
+        var label = new TextBlock
+        {
+            Text = todo.ReminderLabel,
+            FontSize = 11,
+            Foreground = todo.IsDue ? Orange : Gray,
+            FontWeight = todo.IsDue ? FontWeights.SemiBold : FontWeights.Normal,
+            VerticalAlignment = VerticalAlignment.Center,
+            MaxWidth = 170,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+        Grid.SetColumn(label, 2);
+        grid.Children.Add(label);
+
+        var outlook = SmallButton("📅", "Als Erinnerungstermin in Outlook eintragen (öffnet den Termin in Outlook, Kalender wählen und speichern)");
+        outlook.Click += (_, _) => OpenInOutlookAsAppointment(todo, todo.RemindAt ?? DateTime.Now.AddHours(1));
+        Grid.SetColumn(outlook, 3);
+        grid.Children.Add(outlook);
+
+        var delete = SmallButton("✕", "Todo löschen");
+        delete.Click += (_, _) => DeleteTodo(todo);
+        Grid.SetColumn(delete, 4);
+        grid.Children.Add(delete);
+        return grid;
+    }
+
+    private Button SmallButton(string content, string tooltip) => new()
+    {
+        Template = (ControlTemplate)FindResource("PillButton"),
+        Content = content,
+        Background = Brushes.Transparent,
+        BorderBrush = Brushes.Transparent,
+        Margin = new Thickness(2, 0, 0, 0),
+        Cursor = Cursors.Hand,
+        Focusable = false,
+        ToolTip = tooltip,
+    };
+
+    private void CompleteTodo(TodoItem todo)
+    {
+        todo.Done = true;
+        todo.DoneAt = DateTime.Now;
+        SaveTodos();
+        ShowActionBalloon("Todo erledigt", $"„{todo.Text}“\nHier klicken zum Rückgängigmachen.", () =>
+        {
+            todo.Done = false;
+            todo.DoneAt = null;
+            SaveTodos();
+            return Task.CompletedTask;
+        }, timeoutMs: 6000);
+    }
+
+    private void DeleteTodo(TodoItem todo)
+    {
+        int index = _todos.IndexOf(todo);
+        _todos.Remove(todo);
+        SaveTodos();
+        ShowActionBalloon("Todo gelöscht", $"„{todo.Text}“\nHier klicken zum Rückgängigmachen.", () =>
+        {
+            _todos.Insert(Math.Min(Math.Max(index, 0), _todos.Count), todo);
+            SaveTodos();
+            return Task.CompletedTask;
+        }, timeoutMs: 6000);
+    }
+
+    /// <summary>One balloon for all todos that became due (several at once are bundled).</summary>
+    private void CheckTodoReminders(DateTime now)
+    {
+        if (Demo.Active) return;
+        var due = _todos.Where(t => !t.Done && !t.Reminded && t.RemindAt is DateTime at && at <= now).ToList();
+        if (due.Count == 0) return;
+        foreach (var t in due) t.Reminded = true;
+        TodoStore.Save(_todos);
+        _todoSignature = null;
+
+        string text = due.Count == 1
+            ? $"{due[0].Text}" + (due[0].Reminder == TodoReminder.AfterMeeting ? $"\n(nach {due[0].MeetingSubject})" : "")
+            : string.Join("\n", due.Take(4).Select(t => "• " + t.Text)) + (due.Count > 4 ? $"\n… und {due.Count - 4} weitere" : "");
+        ShowActionBalloon(due.Count == 1 ? "Erinnerung" : $"{due.Count} Todos fällig", text + "\nKlicken: Todo-Liste öffnen", () =>
+        {
+            SetUserHidden(false);
+            _pinnedExpanded = true;
+            ApplyExpansion();
+            return Task.CompletedTask;
+        }, timeoutMs: 20000);
+    }
+
+    private void OpenInOutlookAsAppointment(TodoItem todo, DateTime start)
+    {
+        try
+        {
+            var path = OutlookReminderFile.Create(todo, start, _s.TodoOutlookPrivate, _s.TodoOutlookFree);
+            if (!TryStart(path))
+                ShowInfo("Kein Programm für Kalenderdateien (.ics) gefunden – ist Outlook installiert?");
+        }
+        catch (Exception ex)
+        {
+            ShowInfo("Termin konnte nicht erstellt werden: " + ex.Message);
+        }
+    }
+
+    /// <summary>Quick capture: text, optional reminder (after a meeting / at a time), optional Outlook appointment.</summary>
+    private void AddTodo()
+    {
+        var now = DateTime.Now;
+        var choices = new List<(string Label, TodoReminder Kind, DateTime? At, string? Meeting)>
+        {
+            ("Keine Erinnerung", TodoReminder.None, null, null),
+        };
+        foreach (var m in VisibleMeetings().Where(m => m.End > now && m.Start.Date <= now.Date).Take(6))
+            choices.Add(($"Nach „{m.Subject}“ (endet {m.End:HH:mm})", TodoReminder.AfterMeeting, m.End, m.Subject));
+        choices.Add(("In 30 Minuten", TodoReminder.At, now.AddMinutes(30), null));
+        choices.Add(("In 1 Stunde", TodoReminder.At, now.AddHours(1), null));
+        if (now.Hour < 16) choices.Add(("Heute 16:00", TodoReminder.At, now.Date.AddHours(16), null));
+        choices.Add(("Morgen 09:00", TodoReminder.At, now.Date.AddDays(1).AddHours(9), null));
+        int customIndex = choices.Count;
+        choices.Add(("Eigene Zeit …", TodoReminder.At, null, null));
+
+        var text = new TextBox { Margin = new Thickness(0, 2, 0, 10), Padding = new Thickness(3) };
+        var reminder = new ComboBox { Margin = new Thickness(0, 2, 0, 6) };
+        foreach (var c in choices) reminder.Items.Add(c.Label);
+        // Default: after the meeting that is running or next - the typical "nach dem Call erledigen".
+        reminder.SelectedIndex = choices.FindIndex(c => c.Kind == TodoReminder.AfterMeeting) is int i && i > 0 ? i : 0;
+
+        var date = new DatePicker { SelectedDate = now.Date, Width = 130, Margin = new Thickness(0, 0, 8, 0) };
+        var time = new TextBox { Text = now.AddHours(1).ToString("HH:00"), Width = 60, Padding = new Thickness(3) };
+        var custom = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 10), IsEnabled = false };
+        custom.Children.Add(date);
+        custom.Children.Add(time);
+        custom.Children.Add(new TextBlock { Text = "Uhr", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
+
+        var outlook = new CheckBox { Content = "Zusätzlich als Erinnerungstermin in Outlook eintragen", Margin = new Thickness(0, 0, 0, 4) };
+        var isPrivate = new CheckBox { Content = "als privat markieren", IsChecked = _s.TodoOutlookPrivate, Margin = new Thickness(20, 0, 0, 2) };
+        var asFree = new CheckBox { Content = "als „frei“ eintragen (blockiert den Kalender nicht)", IsChecked = _s.TodoOutlookFree, Margin = new Thickness(20, 0, 0, 10) };
+        var outlookHint = new TextBlock
+        {
+            Text = "Outlook öffnet den Termin – dort Kalender wählen und speichern.",
+            Foreground = Brushes.DimGray,
+            FontSize = 11,
+            Margin = new Thickness(20, 0, 0, 10),
+        };
+
+        void SyncEnabled()
+        {
+            bool hasTime = reminder.SelectedIndex > 0;
+            custom.IsEnabled = reminder.SelectedIndex == customIndex;
+            outlook.IsEnabled = hasTime;
+            if (!hasTime) outlook.IsChecked = false;
+            isPrivate.IsEnabled = asFree.IsEnabled = outlook.IsChecked == true;
+        }
+        reminder.SelectionChanged += (_, _) => SyncEnabled();
+        outlook.Checked += (_, _) => SyncEnabled();
+        outlook.Unchecked += (_, _) => SyncEnabled();
+
+        var save = new Button { Content = "Hinzufügen", Width = 100, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+        var cancel = new Button { Content = "Abbrechen", Width = 90, IsCancel = true };
+        var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        footer.Children.Add(save);
+        footer.Children.Add(cancel);
+
+        var panel = new StackPanel { Margin = new Thickness(14) };
+        panel.Children.Add(new TextBlock { Text = "Was möchtest du erledigen?" });
+        panel.Children.Add(text);
+        panel.Children.Add(new TextBlock { Text = "Erinnern:" });
+        panel.Children.Add(reminder);
+        panel.Children.Add(custom);
+        panel.Children.Add(outlook);
+        panel.Children.Add(isPrivate);
+        panel.Children.Add(asFree);
+        panel.Children.Add(outlookHint);
+        panel.Children.Add(footer);
+
+        var dialog = new Window
+        {
+            Title = "Todo hinzufügen",
+            Content = panel,
+            Width = 440,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ResizeMode = ResizeMode.NoResize,
+            Topmost = true,
+        };
+        save.Click += (_, _) =>
+        {
+            if (string.IsNullOrWhiteSpace(text.Text)) { text.Focus(); return; }
+            if (reminder.SelectedIndex == customIndex && CustomTime() == null)
+            {
+                MessageBox.Show(dialog, "Bitte eine Uhrzeit wie 14:30 eingeben.", "Todo", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            dialog.DialogResult = true;
+        };
+        dialog.Loaded += (_, _) => { dialog.Activate(); text.Focus(); };
+        SyncEnabled();
+
+        DateTime? CustomTime() =>
+            date.SelectedDate is DateTime d && TimeSpan.TryParse(time.Text.Trim().Replace('.', ':'), out var t) && t < TimeSpan.FromDays(1)
+                ? d.Date + t : null;
+
+        if (dialog.ShowDialog() != true) return;
+
+        var choice = choices[reminder.SelectedIndex];
+        var todo = new TodoItem
+        {
+            Text = text.Text.Trim(),
+            Reminder = choice.Kind,
+            RemindAt = reminder.SelectedIndex == customIndex ? CustomTime() : choice.At,
+            MeetingSubject = choice.Meeting,
+        };
+        _todos.Add(todo);
+        SaveTodos();
+
+        if (outlook.IsChecked == true && todo.RemindAt is DateTime start)
+        {
+            _s.TodoOutlookPrivate = isPrivate.IsChecked == true;
+            _s.TodoOutlookFree = asFree.IsChecked == true;
+            _s.Save();
+            OpenInOutlookAsAppointment(todo, start);
+        }
+    }
+
     // ───────────────────────── Not attending (skip) ─────────────────────────
 
     private IEnumerable<Meeting> VisibleMeetings() =>
@@ -572,7 +890,7 @@ public partial class MainWindow : Window
         panel.Children.Add(new TextBlock
         {
             Text = $"Doppelklick: Outlook öffnen · Rechtsklick: Einstellungen\n{HotkeyHint}+O ein/aus · +J beitreten"
-                   + (_johnnyAvailable ? " · +A Aufnahme" : "") + " · +K Klick-durch",
+                   + (_johnnyAvailable ? " · +A Aufnahme" : "") + " · +N Todo · +K Klick-durch",
             Foreground = Brushes.Gray,
             FontSize = 11,
             Margin = new Thickness(0, 8, 0, 0),
@@ -851,7 +1169,7 @@ public partial class MainWindow : Window
 
         const uint mods = NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT;
         var failed = new List<string>();
-        foreach (var (id, key) in new[] { (HotkeyToggle, 'O'), (HotkeyJoin, 'J'), (HotkeyJohnny, 'A'), (HotkeyClickThrough, 'K') })
+        foreach (var (id, key) in new[] { (HotkeyToggle, 'O'), (HotkeyJoin, 'J'), (HotkeyJohnny, 'A'), (HotkeyClickThrough, 'K'), (HotkeyTodo, 'N') })
             if ((id != HotkeyJohnny || _johnnyAvailable) && !NativeMethods.RegisterHotKey(_hwnd, id, mods, key))
                 failed.Add($"{HotkeyHint}+{key}");
         if (failed.Count > 0)
@@ -861,7 +1179,7 @@ public partial class MainWindow : Window
 
     private void UnregisterHotkeys()
     {
-        foreach (var id in new[] { HotkeyToggle, HotkeyJoin, HotkeyJohnny, HotkeyClickThrough })
+        foreach (var id in new[] { HotkeyToggle, HotkeyJoin, HotkeyJohnny, HotkeyClickThrough, HotkeyTodo })
             NativeMethods.UnregisterHotKey(_hwnd, id);
     }
 
@@ -878,6 +1196,9 @@ public partial class MainWindow : Window
                 break;
             case HotkeyJohnny:
                 _ = ToggleJohnnyAsync();
+                break;
+            case HotkeyTodo:
+                AddTodo();
                 break;
             case HotkeyClickThrough:
                 _s.ClickThrough = !_s.ClickThrough;
@@ -1033,6 +1354,7 @@ public partial class MainWindow : Window
         menu.Items.Add(Item("In Outlook öffnen", OpenInOutlook));
         menu.Items.Add(Item("Jetzt aktualisieren", () => { InvalidateCalendarCaches(); _ = RefreshAsync(); }));
         menu.Items.Add(Item("Kalender …", EditCalendars));
+        menu.Items.Add(Item($"Todo hinzufügen … ({HotkeyHint}+N)", AddTodo));
         _rejoinItem = Item("Erneut beitreten", () => JoinMeeting(_shown));
         menu.Items.Add(_rejoinItem);
         _skipAllItem = Item("Ausgeblendete Termine wieder anzeigen", ShowSkippedMeetingsAgain);
@@ -1075,6 +1397,7 @@ public partial class MainWindow : Window
         view.Items.Add(new Separator());
         view.Items.Add(Check("Folgetermin und freie Zeit anzeigen", () => _s.ShowFollowUp, () => _s.ShowFollowUp = !_s.ShowFollowUp));
         view.Items.Add(Check("Überschneidende Termine anzeigen", () => _s.ShowOverlaps, () => _s.ShowOverlaps = !_s.ShowOverlaps));
+        view.Items.Add(Check("Todos anzeigen", () => _s.ShowTodos, () => { _s.ShowTodos = !_s.ShowTodos; _todoSignature = null; }));
         view.Items.Add(Check("Tagesübersicht beim Darüberfahren", () => _s.ShowDayOverview, () => _s.ShowDayOverview = !_s.ShowDayOverview));
         view.Items.Add(Check("Kompakt (eine Zeile)", () => _s.Compact, () => _s.Compact = !_s.Compact));
         view.Items.Add(Check("Teams-/Zoom-Link erkennen („Beitreten“)", () => _s.DetectJoinLink, () => _s.DetectJoinLink = !_s.DetectJoinLink));
@@ -1119,7 +1442,7 @@ public partial class MainWindow : Window
     private MenuItem _rejoinItem = null!;
     private MenuItem _hotkeyItem = null!;
 
-    private string HotkeyMenuHeader() => $"Tastenkürzel ({HotkeyHint}+O/J{(_johnnyAvailable ? "/A" : "")}/K)";
+    private string HotkeyMenuHeader() => $"Tastenkürzel ({HotkeyHint}+O/J{(_johnnyAvailable ? "/A" : "")}/N/K)";
 
     private string KeywordHeader()
     {

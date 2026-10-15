@@ -41,6 +41,11 @@
             </Border>
             <TextBlock x:Name="MiniRecording" Text="⏺" Margin="6,0,0,0" FontSize="12" Foreground="#FF5A5A"
                        VerticalAlignment="Center" Visibility="Collapsed"/>
+            <!-- Open todos; orange when one is due -->
+            <Border x:Name="MiniTodo" Margin="8,0,0,0" Padding="5,0" CornerRadius="6" Background="#33FFFFFF"
+                    VerticalAlignment="Center" Visibility="Collapsed">
+                <TextBlock x:Name="MiniTodoText" FontSize="11" FontWeight="SemiBold" Foreground="White"/>
+            </Border>
         </StackPanel>
     </Border>
 
@@ -50,6 +55,7 @@
         <Border.Effect>
             <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.45"/>
         </Border.Effect>
+        <StackPanel>
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
@@ -84,6 +90,9 @@
                         Cursor="Hand" Focusable="False" Click="OnSkipClick"/>
             </StackPanel>
         </Grid>
+        <!-- Todos (filled in code) -->
+        <StackPanel x:Name="TodoPanel" Margin="14,8,0,0"/>
+        </StackPanel>
     </Border>
 </Grid>
 </Window>

@@ -16,6 +16,16 @@ internal static class Demo
     /// <summary>JohnnyAI shown as recording, so the pill and card show the recording state.</summary>
     public static JohnnyStatus Johnny => new(true, "04:51", "Projekt-Daily", false);
 
+    public static List<TodoItem> Todos()
+    {
+        var now = DateTime.Now;
+        return new List<TodoItem>
+        {
+            new() { Text = "Angebot an Kunden schicken", Reminder = TodoReminder.AfterMeeting, MeetingSubject = "Projekt-Daily", RemindAt = now.AddMinutes(10) },
+            new() { Text = "Reisekosten einreichen", Reminder = TodoReminder.At, RemindAt = now.Date.AddDays(1).AddHours(9) },
+        };
+    }
+
     public static List<Meeting> Meetings()
     {
         var now = DateTime.Now;
