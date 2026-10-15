@@ -16,8 +16,10 @@ Kleines Windows-Overlay, das den nächsten Outlook-Termin anzeigt – als unauff
 - **Andocken** oben links / Mitte / rechts, auf jedem Monitor
 - **Bei Bildschirmfreigabe unsichtbar:** In Teams-/Zoom-Freigaben und auf Screenshots sehen andere das Overlay nicht – du schon
 - **Bei Vollbild/Präsentation** automatisch ausgeblendet
-- **Todos:** schnell festhalten, was du erledigen willst (＋ Todo oder Strg+Alt+Umschalt+N) – mit Erinnerung „nach diesem Termin“ oder zu einer Uhrzeit. Offene Todos zählt die Pille (`☐ 3`, orange wenn fällig), in der aufgeklappten Ansicht abhaken oder löschen (mit Rückgängig). Gespeichert lokal neben den Einstellungen.
-- **Todo als Outlook-Termin (📅):** erzeugt einen Erinnerungstermin – standardmäßig privat und als „frei“, mit Outlook-Erinnerung – und öffnet ihn in Outlook; dort Kalender wählen und speichern. Funktioniert ohne IT-Freigabe, auch mit dem neuen Outlook.
+- **Todos und Termine** festhalten (＋ Todo oder Strg+Alt+Umschalt+N) – beim Erfassen wählst du die Art:
+  - **☐ Todo:** bleibt im Overlay, Erinnerung optional „nach diesem Termin“ oder zu einer Uhrzeit – das Overlay erinnert. Die Pille zählt offene Todos (`☐ 3`, orange wenn fällig); abhaken oder löschen, beides mit Rückgängig.
+  - **📅 Termin in Outlook:** erzeugt einen Erinnerungstermin – standardmäßig privat und als „frei“, mit Outlook-Erinnerung – und öffnet ihn in Outlook; dort Kalender wählen und speichern. Outlook erinnert, im Overlay steht er bis zur Uhrzeit als „an Outlook übergeben“ und verschwindet dann von selbst. Funktioniert ohne IT-Freigabe, auch mit dem neuen Outlook.
+  - Ein bestehendes Todo lässt sich per 📅 in einen Outlook-Termin umwandeln. Alles wird lokal neben den Einstellungen gespeichert.
 - **Tastenkürzel** (Strg+Alt+Umschalt + O/J/A/N/K): ein/aus, beitreten, Aufnahme, Todo, Klick-durch-Modus
 - **Optional: [JohnnyAI](https://github.com/HiSchuminator/JohnnyAI)-Steuerung** – Aufnahme mit dem Termin verknüpft starten/stoppen, Aufnahmestatus in der Pille, bei Terminbeginn anbieten oder automatisch starten. Ist JohnnyAI nicht installiert, blendet das Overlay Menü, Knopf und Tastenkürzel dafür automatisch aus.
 

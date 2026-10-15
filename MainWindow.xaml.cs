@@ -466,6 +466,7 @@ public partial class MainWindow : Window
     private string? _todoSignature;
     private static readonly Brush TodoDueBrush = Frozen("#CCE08A1E");
     private static readonly Brush TodoNormalBrush = Frozen("#33FFFFFF");
+    private static readonly Brush TodoAppointmentBrush = Frozen("#8CC4FF");
 
     private void SaveTodos()
     {
@@ -485,13 +486,15 @@ public partial class MainWindow : Window
     private void UpdateTodos(DateTime now)
     {
         CheckTodoReminders(now);
+        RetirePastAppointments(now);
         var open = OpenTodos();
+        int openTodos = open.Count(t => t.Kind == TodoKind.Todo);   // appointments live in Outlook, not counted
         bool anyDue = open.Any(t => t.IsDue);
 
-        MiniTodo.Visibility = _s.ShowTodos && open.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        MiniTodoText.Text = $"☐ {open.Count}";
+        MiniTodo.Visibility = _s.ShowTodos && openTodos > 0 ? Visibility.Visible : Visibility.Collapsed;
+        MiniTodoText.Text = $"☐ {openTodos}";
         MiniTodo.Background = anyDue ? TodoDueBrush : TodoNormalBrush;
-        MiniTodo.ToolTip = anyDue ? "Ein Todo ist fällig" : $"{open.Count} offene Todos";
+        MiniTodo.ToolTip = anyDue ? "Ein Todo ist fällig" : $"{openTodos} offene Todos";
 
         TodoPanel.Visibility = _s.ShowTodos ? Visibility.Visible : Visibility.Collapsed;
         if (!_s.ShowTodos) return;
@@ -540,9 +543,24 @@ public partial class MainWindow : Window
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-        var check = new CheckBox { VerticalAlignment = VerticalAlignment.Center, Focusable = false, ToolTip = "Erledigt" };
-        check.Checked += (_, _) => CompleteTodo(todo);
-        grid.Children.Add(check);
+        bool isAppointment = todo.Kind == TodoKind.Appointment;
+        if (isAppointment)
+        {
+            grid.Children.Add(new TextBlock
+            {
+                Text = "📅",
+                FontSize = 12,
+                Foreground = Brushes.White,
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "Termin in Outlook – Outlook erinnert dich. Der Eintrag verschwindet nach der Uhrzeit von selbst.",
+            });
+        }
+        else
+        {
+            var check = new CheckBox { VerticalAlignment = VerticalAlignment.Center, Focusable = false, ToolTip = "Erledigt" };
+            check.Checked += (_, _) => CompleteTodo(todo);
+            grid.Children.Add(check);
+        }
 
         var text = new TextBlock
         {
@@ -561,21 +579,24 @@ public partial class MainWindow : Window
         {
             Text = todo.ReminderLabel,
             FontSize = 11,
-            Foreground = todo.IsDue ? Orange : Gray,
+            Foreground = todo.IsDue ? Orange : isAppointment ? TodoAppointmentBrush : Gray,
             FontWeight = todo.IsDue ? FontWeights.SemiBold : FontWeights.Normal,
             VerticalAlignment = VerticalAlignment.Center,
-            MaxWidth = 170,
+            MaxWidth = 220,
             TextTrimming = TextTrimming.CharacterEllipsis,
         };
         Grid.SetColumn(label, 2);
         grid.Children.Add(label);
 
-        var outlook = SmallButton("📅", "Als Erinnerungstermin in Outlook eintragen (öffnet den Termin in Outlook, Kalender wählen und speichern)");
-        outlook.Click += (_, _) => OpenInOutlookAsAppointment(todo, todo.RemindAt ?? DateTime.Now.AddHours(1));
-        Grid.SetColumn(outlook, 3);
-        grid.Children.Add(outlook);
+        if (!isAppointment)
+        {
+            var outlook = SmallButton("📅", "In einen Outlook-Termin umwandeln (öffnet ihn in Outlook – Kalender wählen und speichern)");
+            outlook.Click += (_, _) => ConvertToAppointment(todo);
+            Grid.SetColumn(outlook, 3);
+            grid.Children.Add(outlook);
+        }
 
-        var delete = SmallButton("✕", "Todo löschen");
+        var delete = SmallButton("✕", isAppointment ? "Aus der Liste entfernen (der Outlook-Termin bleibt bestehen)" : "Todo löschen");
         delete.Click += (_, _) => DeleteTodo(todo);
         Grid.SetColumn(delete, 4);
         grid.Children.Add(delete);
@@ -621,11 +642,37 @@ public partial class MainWindow : Window
         }, timeoutMs: 6000);
     }
 
+    /// <summary>Appointments were handed to Outlook; once their time is over the list entry has done its job.</summary>
+    private void RetirePastAppointments(DateTime now)
+    {
+        if (Demo.Active) return;
+        var past = _todos.Where(t => t.Kind == TodoKind.Appointment && !t.Done && t.RemindAt is DateTime at && at.AddMinutes(15) <= now).ToList();
+        if (past.Count == 0) return;
+        foreach (var t in past)
+        {
+            t.Done = true;
+            t.DoneAt = now;
+        }
+        TodoStore.Save(_todos);
+        _todoSignature = null;
+    }
+
+    /// <summary>Todo → Outlook appointment at its reminder time (or in an hour when it has none).</summary>
+    private void ConvertToAppointment(TodoItem todo)
+    {
+        var start = todo.RemindAt is DateTime at && at > DateTime.Now ? at : DateTime.Now.AddHours(1);
+        todo.Kind = TodoKind.Appointment;
+        todo.RemindAt = start;
+        todo.Reminder = TodoReminder.At;
+        SaveTodos();
+        OpenInOutlookAsAppointment(todo, start);
+    }
+
     /// <summary>One balloon for all todos that became due (several at once are bundled).</summary>
     private void CheckTodoReminders(DateTime now)
     {
         if (Demo.Active) return;
-        var due = _todos.Where(t => !t.Done && !t.Reminded && t.RemindAt is DateTime at && at <= now).ToList();
+        var due = _todos.Where(t => t.Kind == TodoKind.Todo && !t.Done && !t.Reminded && t.RemindAt is DateTime at && at <= now).ToList();
         if (due.Count == 0) return;
         foreach (var t in due) t.Reminded = true;
         TodoStore.Save(_todos);
@@ -687,28 +734,35 @@ public partial class MainWindow : Window
         custom.Children.Add(time);
         custom.Children.Add(new TextBlock { Text = "Uhr", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
 
-        var outlook = new CheckBox { Content = "Zusätzlich als Erinnerungstermin in Outlook eintragen", Margin = new Thickness(0, 0, 0, 4) };
-        var isPrivate = new CheckBox { Content = "als privat markieren", IsChecked = _s.TodoOutlookPrivate, Margin = new Thickness(20, 0, 0, 2) };
-        var asFree = new CheckBox { Content = "als „frei“ eintragen (blockiert den Kalender nicht)", IsChecked = _s.TodoOutlookFree, Margin = new Thickness(20, 0, 0, 10) };
-        var outlookHint = new TextBlock
+        // Kind first: plain todo (overlay reminds) or appointment handed to Outlook (Outlook reminds).
+        var asTodo = new RadioButton { Content = "☐ Todo – bleibt im Overlay, das Overlay erinnert", IsChecked = true, GroupName = "kind", Margin = new Thickness(0, 4, 0, 2) };
+        var asAppointment = new RadioButton { Content = "📅 Termin in Outlook – Outlook erinnert", GroupName = "kind", Margin = new Thickness(0, 0, 0, 10) };
+        var whenLabel = new TextBlock { Text = "Erinnern:" };
+
+        var isPrivate = new CheckBox { Content = "als privat markieren", IsChecked = _s.TodoOutlookPrivate, Margin = new Thickness(0, 0, 0, 2) };
+        var asFree = new CheckBox { Content = "als „frei“ eintragen (blockiert den Kalender nicht)", IsChecked = _s.TodoOutlookFree, Margin = new Thickness(0, 0, 0, 4) };
+        var outlookOptions = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+        outlookOptions.Children.Add(isPrivate);
+        outlookOptions.Children.Add(asFree);
+        outlookOptions.Children.Add(new TextBlock
         {
             Text = "Outlook öffnet den Termin – dort Kalender wählen und speichern.",
             Foreground = Brushes.DimGray,
             FontSize = 11,
-            Margin = new Thickness(20, 0, 0, 10),
-        };
+        });
 
         void SyncEnabled()
         {
-            bool hasTime = reminder.SelectedIndex > 0;
+            bool appointment = asAppointment.IsChecked == true;
+            // An appointment needs a time - "Keine Erinnerung" isn't an option then.
+            if (appointment && reminder.SelectedIndex == 0) reminder.SelectedIndex = 1;
+            whenLabel.Text = appointment ? "Wann:" : "Erinnern:";
+            outlookOptions.Visibility = appointment ? Visibility.Visible : Visibility.Collapsed;
             custom.IsEnabled = reminder.SelectedIndex == customIndex;
-            outlook.IsEnabled = hasTime;
-            if (!hasTime) outlook.IsChecked = false;
-            isPrivate.IsEnabled = asFree.IsEnabled = outlook.IsChecked == true;
         }
         reminder.SelectionChanged += (_, _) => SyncEnabled();
-        outlook.Checked += (_, _) => SyncEnabled();
-        outlook.Unchecked += (_, _) => SyncEnabled();
+        asTodo.Checked += (_, _) => SyncEnabled();
+        asAppointment.Checked += (_, _) => SyncEnabled();
 
         var save = new Button { Content = "Hinzufügen", Width = 100, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
         var cancel = new Button { Content = "Abbrechen", Width = 90, IsCancel = true };
@@ -719,18 +773,17 @@ public partial class MainWindow : Window
         var panel = new StackPanel { Margin = new Thickness(14) };
         panel.Children.Add(new TextBlock { Text = "Was möchtest du erledigen?" });
         panel.Children.Add(text);
-        panel.Children.Add(new TextBlock { Text = "Erinnern:" });
+        panel.Children.Add(asTodo);
+        panel.Children.Add(asAppointment);
+        panel.Children.Add(whenLabel);
         panel.Children.Add(reminder);
         panel.Children.Add(custom);
-        panel.Children.Add(outlook);
-        panel.Children.Add(isPrivate);
-        panel.Children.Add(asFree);
-        panel.Children.Add(outlookHint);
+        panel.Children.Add(outlookOptions);
         panel.Children.Add(footer);
 
         var dialog = new Window
         {
-            Title = "Todo hinzufügen",
+            Title = "Todo oder Termin hinzufügen",
             Content = panel,
             Width = 440,
             SizeToContent = SizeToContent.Height,
@@ -758,9 +811,11 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() != true) return;
 
         var choice = choices[reminder.SelectedIndex];
+        bool appointment = asAppointment.IsChecked == true;
         var todo = new TodoItem
         {
             Text = text.Text.Trim(),
+            Kind = appointment ? TodoKind.Appointment : TodoKind.Todo,
             Reminder = choice.Kind,
             RemindAt = reminder.SelectedIndex == customIndex ? CustomTime() : choice.At,
             MeetingSubject = choice.Meeting,
@@ -768,7 +823,7 @@ public partial class MainWindow : Window
         _todos.Add(todo);
         SaveTodos();
 
-        if (outlook.IsChecked == true && todo.RemindAt is DateTime start)
+        if (appointment && todo.RemindAt is DateTime start)
         {
             _s.TodoOutlookPrivate = isPrivate.IsChecked == true;
             _s.TodoOutlookFree = asFree.IsChecked == true;

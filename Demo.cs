@@ -22,7 +22,7 @@ internal static class Demo
         return new List<TodoItem>
         {
             new() { Text = "Angebot an Kunden schicken", Reminder = TodoReminder.AfterMeeting, MeetingSubject = "Projekt-Daily", RemindAt = now.AddMinutes(10) },
-            new() { Text = "Reisekosten einreichen", Reminder = TodoReminder.At, RemindAt = now.Date.AddDays(1).AddHours(9) },
+            new() { Text = "Reisekosten einreichen", Kind = TodoKind.Appointment, Reminder = TodoReminder.At, RemindAt = now.Date.AddDays(1).AddHours(9) },
         };
     }
 

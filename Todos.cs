@@ -11,11 +11,19 @@ namespace NextMeetingOverlay;
 
 public enum TodoReminder { None, AfterMeeting, At }
 
+/// <summary>
+/// Todo = lives only in the overlay (ticked off, overlay reminds).
+/// Appointment = handed over to Outlook as a reminder appointment (Outlook reminds); the list
+/// entry only shows it and disappears by itself once its time has passed.
+/// </summary>
+public enum TodoKind { Todo, Appointment }
+
 /// <summary>A personal reminder ("was ich erledigen möchte"), optionally due after a meeting or at a time.</summary>
 public sealed class TodoItem
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Text { get; set; } = "";
+    public TodoKind Kind { get; set; } = TodoKind.Todo;   // older todos.json without "Kind" = plain todos
     public DateTime Created { get; set; } = DateTime.Now;
     public bool Done { get; set; }
     public DateTime? DoneAt { get; set; }
@@ -26,22 +34,30 @@ public sealed class TodoItem
     /// <summary>The reminder balloon was shown already.</summary>
     public bool Reminded { get; set; }
 
+    /// <summary>Only plain todos become "due" - appointments are reminded by Outlook itself.</summary>
     [JsonIgnore]
-    public bool IsDue => !Done && RemindAt is DateTime due && due <= DateTime.Now;
+    public bool IsDue => Kind == TodoKind.Todo && !Done && RemindAt is DateTime due && due <= DateTime.Now;
 
     [JsonIgnore]
     public string ReminderLabel
     {
         get
         {
+            if (Kind == TodoKind.Appointment)
+                return RemindAt is DateTime when ? $"{TimeLabel(when)} · an Outlook übergeben" : "an Outlook übergeben";
             if (Reminder == TodoReminder.None || RemindAt is not DateTime at) return "";
             if (IsDue) return "fällig";
             if (Reminder == TodoReminder.AfterMeeting) return $"nach {MeetingSubject}";
-            var today = DateTime.Today;
-            return at.Date == today ? $"{at:HH:mm}"
-                 : at.Date == today.AddDays(1) ? $"morgen {at:HH:mm}"
-                 : at.ToString("ddd dd.MM. HH:mm", CultureInfo.CurrentCulture);
+            return TimeLabel(at);
         }
+    }
+
+    private static string TimeLabel(DateTime at)
+    {
+        var today = DateTime.Today;
+        return at.Date == today ? $"{at:HH:mm}"
+             : at.Date == today.AddDays(1) ? $"morgen {at:HH:mm}"
+             : at.ToString("ddd dd.MM. HH:mm", CultureInfo.CurrentCulture);
     }
 }
 
