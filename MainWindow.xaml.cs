@@ -323,7 +323,7 @@ public partial class MainWindow : Window
             else FollowUpText.Visibility = Visibility.Collapsed;
         }
 
-        JoinButton.Visibility = main.JoinUrl != null && !_joined.Contains(main.Key) ? Visibility.Visible : Visibility.Collapsed;
+        JoinButton.Visibility = CanJoin(main, now) && !_joined.Contains(main.Key) ? Visibility.Visible : Visibility.Collapsed;
         JoinButton.ToolTip = $"Online-Meeting beitreten ({HotkeyHint}+J)";
         SkipButton.Visibility = Visibility.Visible;
         SkipButton.ToolTip = $"Nicht teilnehmen – „{main.Subject}“ im Overlay ausblenden\n(in Outlook bleibt der Termin unverändert, es geht keine Absage raus)";
@@ -400,7 +400,7 @@ public partial class MainWindow : Window
     private void UpdateOverlapRows(List<Meeting> overlaps, DateTime now)
     {
         // Rebuild when the meetings or their joined state change (join button disappears).
-        string RowKey(Meeting m) => m.Key + (_joined.Contains(m.Key) ? "|joined" : "");
+        string RowKey(Meeting m) => m.Key + (_joined.Contains(m.Key) ? "|joined" : "") + (CanJoin(m, now) ? "|joinable" : "");
         bool sameSet = overlaps.Count == _overlapRows.Count &&
                        overlaps.Select(RowKey).SequenceEqual(_overlapRows.Select(r => r.RowKey));
         if (!sameSet)
@@ -422,7 +422,7 @@ public partial class MainWindow : Window
                 };
                 grid.Children.Add(text);
 
-                if (m.JoinUrl != null && !_joined.Contains(m.Key))
+                if (CanJoin(m, now) && !_joined.Contains(m.Key))
                 {
                     var join = new Button
                     {
@@ -1118,6 +1118,10 @@ public partial class MainWindow : Window
 
     private void OnJoinClick(object sender, RoutedEventArgs e) => JoinMeeting(_shown);
 
+    /// <summary>Joining is offered from <see cref="Settings.JoinLeadMinutes"/> before the start until the end.</summary>
+    private bool CanJoin(Meeting m, DateTime now) =>
+        m.JoinUrl != null && now < m.End && m.Start - now <= TimeSpan.FromMinutes(_s.JoinLeadMinutes);
+
     // Meetings joined via the overlay this session: their "Beitreten" button is hidden.
     // Re-joining stays possible via hotkey or the context menu ("Erneut beitreten").
     private readonly HashSet<string> _joined = new();
@@ -1125,6 +1129,11 @@ public partial class MainWindow : Window
     private void JoinMeeting(Meeting? meeting)
     {
         if (meeting?.JoinUrl == null) return;
+        if (!CanJoin(meeting, DateTime.Now))
+        {
+            ShowInfo($"„{meeting.Subject}“: Beitreten ab {meeting.Start.AddMinutes(-_s.JoinLeadMinutes):HH:mm} möglich.");
+            return;
+        }
         Join(meeting.JoinUrl);
         if (_joined.Add(meeting.Key)) UpdateDisplay();
     }

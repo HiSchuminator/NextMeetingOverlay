@@ -76,6 +76,9 @@ public sealed class Settings
     public bool AutoExpandAtStart { get; set; } = true;
     public int YellowMinutes { get; set; } = 120;
     public int RedMinutes { get; set; } = 15;
+
+    /// <summary>"Beitreten" appears this many minutes before a meeting starts (and stays until it ends).</summary>
+    public int JoinLeadMinutes { get; set; } = 15;
     public int LookaheadDays { get; set; } = 7;
     public int RefreshSeconds { get; set; } = 60;
 
