@@ -588,13 +588,16 @@ public partial class MainWindow : Window
         Grid.SetColumn(label, 2);
         grid.Children.Add(label);
 
-        if (!isAppointment)
+        var outlook = isAppointment
+            ? SmallButton("↻", "Erneut in Outlook öffnen – dort „Zum Kalender hinzufügen“ bzw. „Speichern“ klicken")
+            : SmallButton("📅", "In einen Outlook-Termin umwandeln (öffnet ihn in Outlook – Kalender wählen und speichern)");
+        outlook.Click += (_, _) =>
         {
-            var outlook = SmallButton("📅", "In einen Outlook-Termin umwandeln (öffnet ihn in Outlook – Kalender wählen und speichern)");
-            outlook.Click += (_, _) => ConvertToAppointment(todo);
-            Grid.SetColumn(outlook, 3);
-            grid.Children.Add(outlook);
-        }
+            if (isAppointment) OpenInOutlookAsAppointment(todo, todo.RemindAt ?? DateTime.Now.AddHours(1));
+            else ConvertToAppointment(todo);
+        };
+        Grid.SetColumn(outlook, 3);
+        grid.Children.Add(outlook);
 
         var delete = SmallButton("✕", isAppointment ? "Aus der Liste entfernen (der Outlook-Termin bleibt bestehen)" : "Todo löschen");
         delete.Click += (_, _) => DeleteTodo(todo);
@@ -697,6 +700,10 @@ public partial class MainWindow : Window
             var path = OutlookReminderFile.Create(todo, start, _s.TodoOutlookPrivate, _s.TodoOutlookFree);
             if (!TryStart(path))
                 ShowInfo("Kein Programm für Kalenderdateien (.ics) gefunden – ist Outlook installiert?");
+            else
+                // Outlook (especially the new one) only shows the file - nothing is saved without this click.
+                ShowInfo("Termin in Outlook geöffnet – dort „Zum Kalender hinzufügen“ bzw. „Speichern“ klicken, " +
+                         "sonst wird er nicht eingetragen. Erneut öffnen: ↻ in der Todo-Liste.");
         }
         catch (Exception ex)
         {

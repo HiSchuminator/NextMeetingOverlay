@@ -44,7 +44,7 @@ public sealed class TodoItem
         get
         {
             if (Kind == TodoKind.Appointment)
-                return RemindAt is DateTime when ? $"{TimeLabel(when)} · an Outlook übergeben" : "an Outlook übergeben";
+                return RemindAt is DateTime when ? $"{TimeLabel(when)} · in Outlook geöffnet" : "in Outlook geöffnet";
             if (Reminder == TodoReminder.None || RemindAt is not DateTime at) return "";
             if (IsDue) return "fällig";
             if (Reminder == TodoReminder.AfterMeeting) return $"nach {MeetingSubject}";
