@@ -20,6 +20,7 @@ Kleines Windows-Overlay, das den nächsten Outlook-Termin anzeigt – als unauff
   - **☐ Todo:** bleibt im Overlay, Erinnerung optional „nach diesem Termin“ oder zu einer Uhrzeit – das Overlay erinnert. Die Pille zählt offene Todos (`☐ 3`, orange wenn fällig); abhaken oder löschen, beides mit Rückgängig.
   - **📅 Termin in Outlook:** erzeugt einen Erinnerungstermin – standardmäßig privat und als „frei“, mit Outlook-Erinnerung – und öffnet ihn in Outlook; dort Kalender wählen und speichern. Outlook erinnert, im Overlay steht er bis zur Uhrzeit als „an Outlook übergeben“ und verschwindet dann von selbst. Funktioniert ohne IT-Freigabe, auch mit dem neuen Outlook.
   - Ein bestehendes Todo lässt sich per 📅 in einen Outlook-Termin umwandeln. Alles wird lokal neben den Einstellungen gespeichert.
+  - **✎ Bearbeiten** (oder Doppelklick auf den Text): Text, Erinnerung und Uhrzeit nachträglich ändern. Wird ein Outlook-Termin verschoben, öffnet ihn das Overlay erneut in Outlook – dort speichern (taucht der alte Termin zusätzlich auf, in Outlook löschen).
 - **Tastenkürzel** (Strg+Alt+Umschalt + O/J/A/N/K): ein/aus, beitreten, Aufnahme, Todo, Klick-durch-Modus
 - **Optional: [JohnnyAI](https://github.com/HiSchuminator/JohnnyAI)-Steuerung** – Aufnahme mit dem Termin verknüpft starten/stoppen, Aufnahmestatus in der Pille, bei Terminbeginn anbieten oder automatisch starten. Ist JohnnyAI nicht installiert, blendet das Overlay Menü, Knopf und Tastenkürzel dafür automatisch aus.
 
