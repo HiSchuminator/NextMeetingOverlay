@@ -71,6 +71,19 @@ public sealed class Settings
     public bool TodoOutlookPrivate { get; set; } = true;
     public bool TodoOutlookFree { get; set; } = true;
 
+    // TMetric (optional, off by default): shows today's tracked time and the running timer, read-only.
+    public bool TmetricEnabled { get; set; } = false;
+    /// <summary>Personal API token, DPAPI-protected (current user + PC).</summary>
+    public string? TmetricTokenProtected { get; set; }
+    public int TmetricRefreshMinutes { get; set; } = 2;
+
+    [JsonIgnore]
+    public string? TmetricToken
+    {
+        get => Unprotect(TmetricTokenProtected);
+        set => TmetricTokenProtected = Protect(value);
+    }
+
     // Mini mode: small traffic-light pill, details on hover/click
     public bool MiniMode { get; set; } = true;
     public bool AutoExpandAtStart { get; set; } = true;

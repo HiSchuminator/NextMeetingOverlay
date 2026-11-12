@@ -46,6 +46,11 @@
                     VerticalAlignment="Center" Visibility="Collapsed">
                 <TextBlock x:Name="MiniTodoText" FontSize="11" FontWeight="SemiBold" Foreground="White"/>
             </Border>
+            <!-- TMetric: tracked time today (optional); green dot = timer running -->
+            <Border x:Name="MiniTmetric" Margin="6,0,0,0" Padding="5,0" CornerRadius="6" Background="#33FFFFFF"
+                    VerticalAlignment="Center" Visibility="Collapsed">
+                <TextBlock x:Name="MiniTmetricText" FontSize="11" FontWeight="SemiBold" Foreground="White"/>
+            </Border>
         </StackPanel>
     </Border>
 
@@ -92,6 +97,9 @@
         </Grid>
         <!-- Todos (filled in code) -->
         <StackPanel x:Name="TodoPanel" Margin="14,8,0,0"/>
+        <!-- TMetric work time (optional, filled in code) -->
+        <TextBlock x:Name="TmetricText" Margin="14,8,0,0" FontSize="11.5" Foreground="#B8FFFFFF"
+                   TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
         </StackPanel>
     </Border>
 </Grid>

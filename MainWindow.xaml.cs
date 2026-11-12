@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -105,6 +106,7 @@ public partial class MainWindow : Window
             if (!Demo.Active) BuildTray();
             UpdateDisplay();
             _ = RefreshAsync();
+            _ = RefreshTmetricAsync();
             _ = PollJohnnyAsync();
             if (Demo.Active) Dispatcher.BeginInvoke(async () => await ExportDemoScreenshotAsync(), DispatcherPriority.ApplicationIdle);
         };
@@ -119,6 +121,8 @@ public partial class MainWindow : Window
 
         _johnnyTimer.Tick += async (_, _) => await PollJohnnyAsync();
         _johnnyTimer.Start();
+
+        StartTmetric();
 
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
@@ -254,6 +258,7 @@ public partial class MainWindow : Window
         UpdateJohnnyButton(main, now);
         UpdateMini(main, now);
         UpdateTodos(now);
+        UpdateTmetric(now);
 
         if (main == null)
         {
@@ -458,6 +463,214 @@ public partial class MainWindow : Window
             text.Text = $"∥ {m.Start:HH:mm}–{m.End:HH:mm} {m.Subject} · {state}";
             text.ToolTip = $"Parallel: {m.Subject} ({m.Start:HH:mm}–{m.End:HH:mm})";
         }
+    }
+
+    // ───────────────────────── TMetric (optional) ─────────────────────────
+
+    private readonly TmetricClient _tmetric = new();
+    private readonly DispatcherTimer _tmetricTimer = new();
+    private TmetricSnapshot? _tmetricData;
+    private string? _tmetricError;
+    private bool _tmetricBusy;
+    private static readonly Brush TmetricRunningBrush = Frozen("#3DDC84");
+
+    private void StartTmetric()
+    {
+        _tmetricTimer.Interval = TimeSpan.FromMinutes(Math.Max(1, _s.TmetricRefreshMinutes));
+        _tmetricTimer.Tick += async (_, _) => await RefreshTmetricAsync();
+        _tmetricTimer.Start();
+
+        // Click on the work-time line opens TMetric (desktop app if installed, else the web app).
+        TmetricText.Cursor = Cursors.Hand;
+        TmetricText.MouseLeftButtonDown += (_, e) => { e.Handled = true; OpenTmetric(); };
+        // Same from the small badge in the pill (instead of just expanding the overlay).
+        MiniTmetric.Cursor = Cursors.Hand;
+        MiniTmetric.MouseLeftButtonDown += (_, e) => { e.Handled = true; OpenTmetric(); };
+    }
+
+    /// <summary>Opens the TMetric desktop app when it is installed (an already running one just comes to the front), otherwise app.tmetric.com.</summary>
+    private void OpenTmetric()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "tmetric-desktop", "TMetric Desktop.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "TMetric Desktop", "TMetric Desktop.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "tmetric-desktop", "TMetric Desktop.exe"),
+        };
+        var app = candidates.FirstOrDefault(File.Exists);
+        if (app != null && TryStart(app)) return;
+        if (!TryStart("https://app.tmetric.com/"))
+            ShowInfo("TMetric konnte nicht geöffnet werden.");
+    }
+
+    /// <summary>Reads today's entries from TMetric. A failed refresh keeps the last data and only flags it as stale.</summary>
+    private async Task RefreshTmetricAsync()
+    {
+        if (Demo.Active || !_s.TmetricEnabled || _tmetricBusy) return;
+        var token = _s.TmetricToken;
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            _tmetricData = null;
+            _tmetricError = "kein Token (auf einem anderen PC eingetragen?)";
+            UpdateDisplay();
+            return;
+        }
+        _tmetricBusy = true;
+        try
+        {
+            _tmetricData = await _tmetric.ReadTodayAsync(token);
+            _tmetricError = null;
+        }
+        catch (TmetricAuthException)
+        {
+            _tmetricData = null;
+            _tmetricError = "Token ungültig oder gesperrt";
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            _tmetricError = "TMetric nicht erreichbar";
+        }
+        catch (Exception ex)
+        {
+            _tmetricError = ex.Message;
+        }
+        finally
+        {
+            _tmetricBusy = false;
+        }
+        UpdateDisplay();
+    }
+
+    private void UpdateTmetric(DateTime now)
+    {
+        if (!_s.TmetricEnabled || Demo.Active)
+        {
+            MiniTmetric.Visibility = Visibility.Collapsed;
+            TmetricText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (_tmetricData is not { } data)
+        {
+            // Nothing read yet: stay quiet while loading, show the reason once it failed.
+            MiniTmetric.Visibility = _tmetricError != null ? Visibility.Visible : Visibility.Collapsed;
+            MiniTmetricText.Text = "⏱ ?";
+            MiniTmetricText.Foreground = Orange;
+            MiniTmetric.ToolTip = "TMetric: " + _tmetricError;
+            TmetricText.Visibility = _tmetricError != null ? Visibility.Visible : Visibility.Collapsed;
+            TmetricText.Text = "⏱ TMetric: " + _tmetricError;
+            TmetricText.Foreground = Orange;
+            return;
+        }
+
+        var total = data.TotalAt(now);
+        string hm = $"{(int)total.TotalHours}:{total.Minutes:00}";
+        bool running = data.RunningSince != null;
+        string stale = _tmetricError != null ? $" · Stand veraltet ({_tmetricError})" : "";
+
+        MiniTmetric.Visibility = Visibility.Visible;
+        MiniTmetricText.Text = (running ? "● " : "⏱ ") + hm;
+        MiniTmetricText.Foreground = running ? TmetricRunningBrush : Brushes.White;
+        MiniTmetric.ToolTip = (running
+            ? $"TMetric: heute {hm} h, Timer läuft" + (data.RunningLabel != null ? $" – {data.RunningLabel}" : "")
+            : $"TMetric: heute {hm} h, kein Timer aktiv") + stale + "\nKlicken: TMetric öffnen";
+
+        TmetricText.Visibility = Visibility.Visible;
+        TmetricText.ToolTip = "Klicken: TMetric öffnen";
+        TmetricText.Foreground = _tmetricError != null ? Orange : Brushes.White;
+        TmetricText.Text = $"⏱ Heute {hm} h"
+            + (data.RunningSince is DateTime since
+                ? $" · läuft: {data.RunningLabel ?? "Timer"} (seit {since:HH:mm})"
+                : " · kein Timer aktiv")
+            + stale;
+    }
+
+    /// <summary>Menu toggle: enabling asks for the token first (cancel = stays off).</summary>
+    private void ToggleTmetric()
+    {
+        if (_s.TmetricEnabled)
+        {
+            _s.TmetricEnabled = false;
+            _tmetricData = null;
+            _tmetricError = null;
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_s.TmetricToken) && !EditTmetricToken()) return;
+        _s.TmetricEnabled = true;
+        _ = RefreshTmetricAsync();
+    }
+
+    private void RemoveTmetricToken()
+    {
+        _s.TmetricToken = null;
+        _s.TmetricEnabled = false;
+        _tmetricData = null;
+        _tmetricError = null;
+        _tmetric.Reset();
+        _s.Save();
+        UpdateDisplay();
+    }
+
+    /// <summary>Asks for the personal API token (hidden input), checks it against TMetric and stores it protected.</summary>
+    private bool EditTmetricToken()
+    {
+        var box = new PasswordBox { Margin = new Thickness(0, 4, 0, 6), Padding = new Thickness(3) };
+        var status = new TextBlock { Foreground = Brushes.DimGray, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10), MinHeight = 16 };
+        var ok = new Button { Content = "Prüfen und speichern", Width = 150, IsDefault = true, Margin = new Thickness(0, 0, 8, 0) };
+        var cancel = new Button { Content = "Abbrechen", Width = 90, IsCancel = true };
+        var footer = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        footer.Children.Add(ok);
+        footer.Children.Add(cancel);
+
+        var panel = new StackPanel { Margin = new Thickness(14) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Persönlicher API-Token aus TMetric (Profil → „Get new API token“). " +
+                   "Er wird nur auf diesem PC verschlüsselt gespeichert und nur zum Lesen deiner Arbeitszeit genutzt.",
+            TextWrapping = TextWrapping.Wrap,
+        });
+        panel.Children.Add(box);
+        panel.Children.Add(status);
+        panel.Children.Add(footer);
+
+        var dialog = new Window
+        {
+            Title = "TMetric – API-Token",
+            Content = panel,
+            Width = 440,
+            SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            ResizeMode = ResizeMode.NoResize,
+            Topmost = true,
+        };
+        ok.Click += async (_, _) =>
+        {
+            var token = box.Password.Trim();
+            if (token.Length == 0) { box.Focus(); return; }
+            ok.IsEnabled = false;
+            status.Text = "Verbindung wird geprüft …";
+            try
+            {
+                _tmetric.Reset();
+                var name = await _tmetric.ConnectAsync(token);
+                _s.TmetricToken = token;
+                _s.Save();
+                status.Text = string.IsNullOrEmpty(name) ? "Verbunden." : $"Verbunden als {name}.";
+                dialog.DialogResult = true;
+            }
+            catch (TmetricAuthException)
+            {
+                status.Text = "TMetric hat den Token abgelehnt – bitte prüfen (oder vom Administrator gesperrt).";
+                ok.IsEnabled = true;
+            }
+            catch (Exception ex)
+            {
+                status.Text = "Keine Verbindung zu TMetric: " + ex.Message;
+                ok.IsEnabled = true;
+            }
+        };
+        dialog.Loaded += (_, _) => { dialog.Activate(); box.Focus(); };
+        return dialog.ShowDialog() == true;
     }
 
     // ───────────────────────── Todos ─────────────────────────
@@ -1538,6 +1751,18 @@ public partial class MainWindow : Window
                 () => { _s.Opacity = value; Opacity = value; }));
         view.Items.Add(opacity);
         menu.Items.Add(view);
+
+        // Optional: off until switched on (then asks for the personal API token).
+        var tmetric = new MenuItem { Header = "TMetric (Arbeitszeit)" };
+        tmetric.Items.Add(Check("Arbeitszeit aus TMetric anzeigen", () => _s.TmetricEnabled, ToggleTmetric));
+        tmetric.Items.Add(new Separator());
+        tmetric.Items.Add(Item("API-Token eintragen / ändern …", () =>
+        {
+            if (EditTmetricToken() && _s.TmetricEnabled) _ = RefreshTmetricAsync();
+        }));
+        tmetric.Items.Add(Item("API-Token entfernen", RemoveTmetricToken));
+        tmetric.Items.Add(Item("Jetzt aktualisieren", () => _ = RefreshTmetricAsync()));
+        menu.Items.Add(tmetric);
 
         var visibility = new MenuItem { Header = "Sichtbarkeit" };
         visibility.Items.Add(Check("Bei Bildschirmfreigabe unsichtbar (Teams, Zoom, Screenshots)", () => _s.HideFromScreenShare, () => _s.HideFromScreenShare = !_s.HideFromScreenShare));

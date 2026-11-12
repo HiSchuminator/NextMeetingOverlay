@@ -24,6 +24,8 @@ Kleines Windows-Overlay, das den nächsten Outlook-Termin anzeigt – als unauff
 - **Tastenkürzel** (Strg+Alt+Umschalt + O/J/A/N/K): ein/aus, beitreten, Aufnahme, Todo, Klick-durch-Modus
 - **Optional: [JohnnyAI](https://github.com/HiSchuminator/JohnnyAI)-Steuerung** – Aufnahme mit dem Termin verknüpft starten/stoppen, Aufnahmestatus in der Pille, bei Terminbeginn anbieten oder automatisch starten. Ist JohnnyAI nicht installiert, blendet das Overlay Menü, Knopf und Tastenkürzel dafür automatisch aus.
 
+- **Optional: TMetric-Arbeitszeit** – zeigt die heute erfasste Zeit und den laufenden Timer (`⏱ 5:12`, mit laufendem Timer `● 5:12` in Grün; in den Details mit Projekt/Aufgabe). Ein Klick darauf öffnet die TMetric-Desktop-App bzw. die Webseite. Standardmäßig aus: Rechtsklick → **TMetric (Arbeitszeit)** → einschalten und den persönlichen API-Token eintragen (TMetric → Profil → „Get new API token“). Der Token wird nur auf deinem PC verschlüsselt gespeichert; das Overlay liest ausschließlich, es schreibt nie etwas nach TMetric. Abgefragt wird alle 2 Minuten.
+
 ## Kalender
 
 Rechtsklick → **Kalender …**: beliebig viele Kalender eintragen, einzeln ein- und ausschalten. Die Termine aller eingeschalteten Kalender werden zusammen angezeigt; steht derselbe Termin in mehreren Kalendern, erscheint er nur einmal. Bei mehr als einem Kalender steht dessen Name beim Termin (z. B. „Arbeit“, „Privat“). Ist ein Kalender nicht erreichbar, laufen die anderen weiter – der Hinweis steht im Tooltip.
