@@ -75,7 +75,11 @@ public sealed class Settings
     public bool TmetricEnabled { get; set; } = false;
     /// <summary>Personal API token, DPAPI-protected (current user + PC).</summary>
     public string? TmetricTokenProtected { get; set; }
-    public int TmetricRefreshMinutes { get; set; } = 2;
+    /// <summary>Project of the generic "Timer starten" pill (stops the running timer, starts this one without task/note). Empty = no pill.</summary>
+    public string TmetricQuickProject { get; set; } = "";
+    /// <summary>Shortcut list of the last TMetric entries (project/ticket/note) under the work-time line.</summary>
+    public bool TmetricShowRecent { get; set; } = true;
+    public int TmetricRecentCount { get; set; } = 5;
 
     [JsonIgnore]
     public string? TmetricToken

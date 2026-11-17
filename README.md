@@ -24,7 +24,11 @@ Kleines Windows-Overlay, das den nächsten Outlook-Termin anzeigt – als unauff
 - **Tastenkürzel** (Strg+Alt+Umschalt + O/J/A/N/K): ein/aus, beitreten, Aufnahme, Todo, Klick-durch-Modus
 - **Optional: [JohnnyAI](https://github.com/HiSchuminator/JohnnyAI)-Steuerung** – Aufnahme mit dem Termin verknüpft starten/stoppen, Aufnahmestatus in der Pille, bei Terminbeginn anbieten oder automatisch starten. Ist JohnnyAI nicht installiert, blendet das Overlay Menü, Knopf und Tastenkürzel dafür automatisch aus.
 
-- **Optional: TMetric-Arbeitszeit** – zeigt die heute erfasste Zeit und den laufenden Timer (`⏱ 5:12`, mit laufendem Timer `● 5:12` in Grün; in den Details mit Projekt/Aufgabe). Ein Klick darauf öffnet die TMetric-Desktop-App bzw. die Webseite. Standardmäßig aus: Rechtsklick → **TMetric (Arbeitszeit)** → einschalten und den persönlichen API-Token eintragen (TMetric → Profil → „Get new API token“). Der Token wird nur auf deinem PC verschlüsselt gespeichert; das Overlay liest ausschließlich, es schreibt nie etwas nach TMetric. Abgefragt wird alle 2 Minuten.
+- **Optional: TMetric-Arbeitszeit** – standardmäßig aus. Einschalten: Rechtsklick → **TMetric (Arbeitszeit)** → „Arbeitszeit aus TMetric anzeigen“ und den persönlichen API-Token eintragen (TMetric → Profil → „Get new API token“). Der Token wird nur auf deinem PC verschlüsselt gespeichert.
+  - **Anzeige:** heute erfasste Zeit (`⏱ 5:12`, mit laufendem Timer `● 5:12` in Grün). In der eingeklappten Pille steht in einer zweiten Zeile der laufende Vorgang; aufgeklappt ist er grün markiert („läuft seit 09:40“). Ein Klick auf die Zeit öffnet die TMetric-Desktop-App bzw. die Webseite.
+  - **Schnellwahl zum Wechseln:** darunter die zuletzt genutzten Einträge (Projekt, Ticket oder Notiz) – ein Klick beendet den laufenden Timer und startet den gewählten im selben Moment, es entsteht keine Pause. Optional steht ganz oben eine **Schnellprojekt-Pille** („<Projekt> (ohne Titel)“): Rechtsklick → TMetric → „Projekt für Timer starten ändern …“.
+  - **Lesen und Schreiben:** Das Overlay liest nur. Es ändert den Timer in TMetric ausschließlich, wenn du selbst auf einen dieser Einträge klickst.
+  - Abgefragt wird alle 30 Sekunden und sofort beim Aufklappen. Der Knopf **↻** (oder Rechtsklick → „Jetzt aktualisieren“) lädt Kalender und TMetric sofort neu.
 
 ## Kalender
 

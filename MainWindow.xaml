@@ -31,6 +31,7 @@
         <Border.Effect>
             <DropShadowEffect BlurRadius="10" ShadowDepth="1" Opacity="0.4"/>
         </Border.Effect>
+        <StackPanel>
         <StackPanel Orientation="Horizontal">
             <Ellipse x:Name="MiniDot" Width="10" Height="10" Fill="#3DDC84" VerticalAlignment="Center"/>
             <TextBlock x:Name="MiniText" Margin="7,0,0,0" FontSize="12.5" FontWeight="SemiBold"
@@ -51,6 +52,10 @@
                     VerticalAlignment="Center" Visibility="Collapsed">
                 <TextBlock x:Name="MiniTmetricText" FontSize="11" FontWeight="SemiBold" Foreground="White"/>
             </Border>
+        </StackPanel>
+        <!-- Second line: what TMetric is tracking right now (optional, filled in code) -->
+        <TextBlock x:Name="MiniTmetricTitle" Margin="0,3,0,0" FontSize="11" Foreground="#E6FFFFFF"
+                   MaxWidth="300" TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
         </StackPanel>
     </Border>
 
@@ -83,6 +88,10 @@
             </StackPanel>
 
             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                <Button x:Name="RefreshButton" Template="{StaticResource PillButton}" Content="↻"
+                        Background="Transparent" BorderBrush="#55FFFFFF" Margin="0,0,6,0"
+                        Cursor="Hand" Focusable="False" Click="OnRefreshClick"
+                        ToolTip="Jetzt aktualisieren (Kalender und TMetric neu laden)"/>
                 <Button x:Name="JohnnyButton" Template="{StaticResource PillButton}" Content="⏺"
                         Background="Transparent" BorderBrush="#66FF5A5A" Margin="0,0,6,0"
                         Cursor="Hand" Focusable="False" Click="OnJohnnyClick"
@@ -98,8 +107,12 @@
         <!-- Todos (filled in code) -->
         <StackPanel x:Name="TodoPanel" Margin="14,8,0,0"/>
         <!-- TMetric work time (optional, filled in code) -->
-        <TextBlock x:Name="TmetricText" Margin="14,8,0,0" FontSize="11.5" Foreground="#B8FFFFFF"
-                   TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
+        <Grid x:Name="TmetricRow" Margin="14,8,0,0" Visibility="Collapsed">
+            <TextBlock x:Name="TmetricText" FontSize="11.5" Foreground="#B8FFFFFF"
+                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+        </Grid>
+        <!-- Timer shortcuts: generic quick project on top, then the last TMetric entries (filled in code) -->
+        <StackPanel x:Name="TmetricRecentPanel" Margin="14,4,0,0" Visibility="Collapsed"/>
         </StackPanel>
     </Border>
 </Grid>
