@@ -305,7 +305,7 @@ public partial class MainWindow : Window
             FollowUpText.Visibility = Visibility.Collapsed;
             JoinButton.Visibility = Visibility.Collapsed;
             SkipButton.Visibility = Visibility.Collapsed;
-            Card.ToolTip = "Rechtsklick: Einstellungen";
+            MeetingGrid.ToolTip = "Rechtsklick: Einstellungen";
             SetTrayText(SubjectText.Text);
             return;
         }
@@ -1582,7 +1582,7 @@ public partial class MainWindow : Window
             FontSize = 11,
             Margin = new Thickness(0, 8, 0, 0),
         });
-        Card.ToolTip = new ToolTip { Content = panel };
+        MeetingGrid.ToolTip = new ToolTip { Content = panel };
     }
 
     private static string FormatSpan(TimeSpan span)
