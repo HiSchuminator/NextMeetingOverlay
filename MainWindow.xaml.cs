@@ -648,6 +648,10 @@ public partial class MainWindow : Window
         if (!string.IsNullOrWhiteSpace(project))
             TmetricRecentPanel.Children.Add(CreateGenericPill(project, genericRunning, data.RunningSince));
 
+        // 1b. explicit break: only while a timer runs, directly under the generic entry
+        if (data.RunningSince != null)
+            TmetricRecentPanel.Children.Add(CreatePausePill());
+
         // 2. the entry that runs right now, if TMetric's recent list does not show it yet
         if (!runningListed)
             TmetricRecentPanel.Children.Add(CreateTimerRow(data.RunningLabel ?? "Timer läuft", "Läuft gerade.", true, false, null, data.RunningSince));
@@ -701,6 +705,63 @@ public partial class MainWindow : Window
             pill.Click += (_, _) => _ = StartQuickTimerAsync();
         }
         return pill;
+    }
+
+    /// <summary>"⏸ Pause" pill: stops the running timer without starting another one (explicit break).</summary>
+    private Button CreatePausePill()
+    {
+        var pill = new Button
+        {
+            Template = (ControlTemplate)FindResource("PillButton"),
+            Margin = new Thickness(0, 0, 4, 4),
+            Focusable = false,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(0),
+            Content = "⏸  Pause",
+            Background = Frozen("#66FFB347"),
+            BorderBrush = Frozen("#FFB347"),
+            Cursor = Cursors.Hand,
+            ToolTip = "Laufenden Timer in TMetric beenden, ohne einen neuen zu starten.\n" +
+                      "Die Lücke danach ist die Pause. Weiter geht es mit einem Klick auf einen Eintrag.",
+        };
+        pill.Click += (_, _) => _ = PauseTimerAsync();
+        return pill;
+    }
+
+    /// <summary>"Pause": stops the running TMetric timer (the only thing it writes), then refreshes the display.</summary>
+    private async Task PauseTimerAsync()
+    {
+        if (_tmetricBusy) return;
+        var token = _s.TmetricToken;
+        if (!_s.TmetricEnabled || string.IsNullOrWhiteSpace(token))
+        {
+            ShowInfo("TMetric ist nicht eingeschaltet (Rechtsklick → TMetric → „Arbeitszeit aus TMetric anzeigen“).");
+            return;
+        }
+
+        _tmetricBusy = true;   // no read in between
+        TmetricRecentPanel.IsEnabled = false;
+        try
+        {
+            var stopped = await _tmetric.StopRunningAsync(token);
+            ShowInfo(stopped
+                ? "TMetric: Pause – der Timer wurde beendet. Weiter mit einem Klick auf einen Eintrag."
+                : "TMetric: Es läuft kein Timer.");
+        }
+        catch (TmetricAuthException)
+        {
+            ShowInfo("TMetric hat den Token abgelehnt (oder Schreiben ist nicht erlaubt).");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            ShowInfo("TMetric: " + ex.Message);
+        }
+        finally
+        {
+            _tmetricBusy = false;
+            TmetricRecentPanel.IsEnabled = true;
+        }
+        await RefreshTmetricAsync();
     }
 
     /// <summary>One row of the timer shortcuts. <paramref name="onClick"/> null = not clickable (it runs already).</summary>
@@ -2110,6 +2171,7 @@ public partial class MainWindow : Window
         tmetric.Items.Add(Check("Arbeitszeit aus TMetric anzeigen", () => _s.TmetricEnabled, ToggleTmetric));
         tmetric.Items.Add(new Separator());
         tmetric.Items.Add(Item("Timer starten (Schnellprojekt, ohne Pause)", () => _ = StartQuickTimerAsync()));
+        tmetric.Items.Add(Item("Pause (laufenden Timer beenden)", () => _ = PauseTimerAsync()));
         tmetric.Items.Add(Item("Projekt für „Timer starten“ ändern …", EditQuickProject));
         tmetric.Items.Add(Check("Zuletzt genutzte Einträge als Schnellwahl anzeigen", () => _s.TmetricShowRecent,
             () => { _s.TmetricShowRecent = !_s.TmetricShowRecent; _recentSignature = null; _ = RefreshTmetricAsync(); }));

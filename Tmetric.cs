@@ -218,6 +218,24 @@ public sealed class TmetricClient
         return await SwitchAsync(token, running?.Id, body, ct);
     }
 
+    /// <summary>
+    /// Explicit "Pause": stops the running timer and starts nothing. The gap that follows is the break in TMetric.
+    /// Returns false if no timer was running.
+    /// </summary>
+    public async Task<bool> StopRunningAsync(string token, CancellationToken ct = default)
+    {
+        await ConnectAsync(token, ct);
+        var running = await GetRunningAsync(token, ct);
+        if (running == null) return false;
+
+        // Same spelling as in SwitchAsync: the stop (PUT) takes local time without offset.
+        var now = DateTime.Now;
+        var localStamp = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, now.Second, DateTimeKind.Local)
+            .ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture);
+        using var _ = await SendAsync(HttpMethod.Put, $"/accounts/{_accountId}/timeentries/{running.Id}", token, new { endTime = localStamp }, ct);
+        return true;
+    }
+
     private sealed record RunningEntry(long Id, string Key);
 
     /// <summary>The latest entry, if it has no end time (= the timer is running).</summary>
