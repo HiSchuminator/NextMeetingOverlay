@@ -9,7 +9,7 @@ Kleines Windows-Overlay, das den nächsten Outlook-Termin anzeigt – als unauff
 ## Funktionen
 
 - **Ampel-Pille:** grün = mehr als 2 Std frei · gelb = Termin in ≤ 2 Std · rot = in ≤ 15 Min oder läuft (blinkt in der letzten Minute) · „+1“ bei überschneidenden Terminen
-- **Details** bei Mausberührung oder Klick: Uhrzeit, Countdown, Ort, parallele Termine, Folgetermin mit freier Zeit, Tagesübersicht
+- **Details** bei Mausberührung oder Klick: Uhrzeit, Countdown, Ort, parallele Termine, Folgetermin mit freier Zeit, Tagesübersicht (die Tagesübersicht erscheint nur über dem Terminbereich, nicht über Todos und TMetric). Der Knopf **–** (Minimieren) klappt die Details sofort wieder zur kleinen Pille ein – auch wenn sie per Klick festgehalten waren; die Pille öffnet sich erst wieder, nachdem die Maus sie einmal verlassen hat.
 - **„Beitreten“-Knopf** für Teams-, Zoom-, Meet- und Webex-Links – erscheint ab 15 Minuten vor Beginn und verschwindet, sobald du über das Overlay beigetreten bist (erneut beitreten: Strg+Alt+Umschalt+J oder Rechtsklick → „Erneut beitreten“)
 - **Nicht teilnehmen (✕):** blendet einen einzelnen Termin im Overlay aus – das nächste rückt nach. In Outlook bleibt der Termin unverändert, es geht keine Absage raus. Rückgängig über den Hinweis oder Rechtsklick → „Ausgeblendete Termine wieder anzeigen“
 - **Filter:** als „frei“ markierte Blocker, Stichwörter (Mittag, Pause, …), ganztägige, abgesagte, private Termine – alles einzeln schaltbar
