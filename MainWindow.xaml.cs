@@ -67,6 +67,8 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _collapseTimer = new() { Interval = TimeSpan.FromMilliseconds(900) };
     private bool _hoverExpanded;
     private bool _pinnedExpanded;
+    private bool _hoverSuppressed;                    // set by "Minimieren" until the mouse leaves the window once
+    private DateTime _autoExpandSuppressedUntil = DateTime.MinValue;   // no automatic pop-up at a meeting start for a while
     private bool _autoExpanded;
 
     private bool _johnnyRunning;
@@ -90,8 +92,17 @@ public partial class MainWindow : Window
             _hoverExpanded = false;
             ApplyExpansion();
         };
-        MouseEnter += (_, _) => { _collapseTimer.Stop(); if (!_hoverExpanded) _expandTimer.Start(); };
-        MouseLeave += (_, _) => { _expandTimer.Stop(); if (_hoverExpanded) _collapseTimer.Start(); };
+        MouseEnter += (_, _) =>
+        {
+            _collapseTimer.Stop();
+            if (!_hoverExpanded && !_hoverSuppressed) _expandTimer.Start();
+        };
+        MouseLeave += (_, _) =>
+        {
+            _hoverSuppressed = false;   // after "Minimieren": hovering works again once the mouse has been away
+            _expandTimer.Stop();
+            if (_hoverExpanded) _collapseTimer.Start();
+        };
         _menu.Closed += (_, _) => { if (!IsMouseOver && _hoverExpanded) _collapseTimer.Start(); };
 
         SourceInitialized += (_, _) =>
@@ -414,13 +425,28 @@ public partial class MainWindow : Window
         MiniOverlap.Visibility = overlapCount > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         // Briefly show the details around a meeting's start (join button, JohnnyAI prompt).
-        _autoExpanded = _s.AutoExpandAtStart && main != null &&
+        _autoExpanded = _s.AutoExpandAtStart && main != null && now >= _autoExpandSuppressedUntil &&
                         now >= main.Start - TimeSpan.FromMinutes(1) && now <= main.Start + TimeSpan.FromMinutes(2);
+        ApplyExpansion();
+    }
+
+    /// <summary>"Minimieren": back to the small pill - also when it was pinned open, and no instant re-open under the mouse.</summary>
+    private void OnMinimizeClick(object sender, RoutedEventArgs e)
+    {
+        _pinnedExpanded = false;
+        _hoverExpanded = false;
+        _autoExpanded = false;
+        _expandTimer.Stop();
+        _collapseTimer.Stop();
+        _hoverSuppressed = true;
+        _autoExpandSuppressedUntil = DateTime.Now.AddMinutes(3);
         ApplyExpansion();
     }
 
     private void ApplyExpansion()
     {
+        // Without mini mode the card is always open - there is nothing to minimize to.
+        MinimizeButton.Visibility = _s.MiniMode ? Visibility.Visible : Visibility.Collapsed;
         bool expanded = !_s.MiniMode || _hoverExpanded || _pinnedExpanded || _autoExpanded;
         var cardVisibility = expanded ? Visibility.Visible : Visibility.Collapsed;
         if (Card.Visibility == cardVisibility) return;

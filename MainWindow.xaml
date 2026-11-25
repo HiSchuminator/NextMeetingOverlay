@@ -104,6 +104,10 @@
                 <Button x:Name="SkipButton" Template="{StaticResource PillButton}" Content="✕"
                         Background="Transparent" BorderBrush="#55FFFFFF" Margin="6,0,0,0"
                         Cursor="Hand" Focusable="False" Click="OnSkipClick"/>
+                <Button x:Name="MinimizeButton" Template="{StaticResource PillButton}" Content="–"
+                        Background="Transparent" BorderBrush="#55FFFFFF" Margin="6,0,0,0"
+                        Cursor="Hand" Focusable="False" Click="OnMinimizeClick"
+                        ToolTip="Minimieren – zurück zur kleinen Pille"/>
             </StackPanel>
         </Grid>
         <!-- Todos (filled in code) -->
