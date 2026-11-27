@@ -80,6 +80,8 @@ public sealed class Settings
     public bool TmetricShowRunningRow { get; set; } = true;
     /// <summary>Write the TMetric entries to a CSV file per month (folder "TMetric-Log" next to the settings). Off by default.</summary>
     public bool TmetricLogEnabled { get; set; } = false;
+    /// <summary>Month ("yyyy-MM") for which the log was filled with all entries of that month so far; once per month, automatically.</summary>
+    public string? TmetricLogBackfilledMonth { get; set; }
     /// <summary>Personal API token, DPAPI-protected (current user + PC).</summary>
     public string? TmetricTokenProtected { get; set; }
 

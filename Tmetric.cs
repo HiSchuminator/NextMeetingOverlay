@@ -107,9 +107,7 @@ public sealed class TmetricClient
             bool running = !TryTime(entry, "endTime", out var end);
             if (running) end = now;
 
-            if (entry.TryGetProperty("id", out var idElement) && idElement.TryGetInt64(out var entryId))
-                entries.Add(new TmetricEntry(entryId, start, running ? null : end, Name(entry, "project"), TaskNumber(entry), Name(entry, "task"),
-                    entry.TryGetProperty("note", out var noteElement) && noteElement.ValueKind == JsonValueKind.String ? noteElement.GetString() : null));
+            if (ToEntry(entry) is { } logged) entries.Add(logged);
 
             var from = start < dayStart ? dayStart : start;
             var to = end > dayEnd ? dayEnd : end;
@@ -127,6 +125,29 @@ public sealed class TmetricClient
             }
         }
         return new TmetricSnapshot { Completed = completed, RunningSince = runningSince, RunningLabel = label, RunningTitle = runningTitle, Entries = entries };
+    }
+
+    /// <summary>All entries between two days (inclusive), e.g. a whole month for the log. Read only.</summary>
+    public async Task<List<TmetricEntry>> ReadEntriesAsync(string token, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        await ConnectAsync(token, ct);
+        string D(DateTime d) => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        using var doc = await GetAsync($"/accounts/{_accountId}/timeentries?userId={_userId}&startDate={D(from)}&endDate={D(to)}", token, ct);
+        var list = new List<TmetricEntry>();
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return list;
+        foreach (var entry in doc.RootElement.EnumerateArray())
+            if (ToEntry(entry) is { } e) list.Add(e);
+        return list;
+    }
+
+    /// <summary>One API entry as <see cref="TmetricEntry"/>; End stays null while the timer runs. Null if the entry is unusable.</summary>
+    private static TmetricEntry? ToEntry(JsonElement entry)
+    {
+        if (!TryTime(entry, "startTime", out var start)) return null;
+        if (!entry.TryGetProperty("id", out var idElement) || !idElement.TryGetInt64(out var id)) return null;
+        DateTime? end = TryTime(entry, "endTime", out var stop) ? stop : null;
+        string? note = entry.TryGetProperty("note", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
+        return new TmetricEntry(id, start, end, Name(entry, "project"), TaskNumber(entry), Name(entry, "task"), note);
     }
 
     /// <summary>Number of the ticket in the connected ticket system (e.g. "27791"), if the task is linked to one.</summary>

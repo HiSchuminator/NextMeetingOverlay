@@ -585,6 +585,7 @@ public partial class MainWindow : Window
             _tmetricData = await _tmetric.ReadTodayAsync(token);
             _tmetricError = null;
             WriteTmetricLog(_tmetricData);
+            _ = BackfillTmetricLogIfNeededAsync(token);
         }
         catch (TmetricAuthException)
         {
@@ -617,6 +618,36 @@ public partial class MainWindow : Window
             try { TmetricLog.Write(folder, entries, DateTime.Now); }
             catch { /* locked by Excel or no write access: the next read tries again */ }
         });
+    }
+
+    private DateTime _lastBackfillAttempt = DateTime.MinValue;
+    private bool _backfillRunning;
+
+    /// <summary>
+    /// Once per month (and after "ganzen Monat neu laden"): reads ALL entries from the 1st of the month up to now and
+    /// merges them into the log, so the file starts with the month so far, not only with the days since it was switched on.
+    /// A failed attempt is repeated after 5 minutes at the earliest.
+    /// </summary>
+    private async Task BackfillTmetricLogIfNeededAsync(string token)
+    {
+        var month = DateTime.Now.ToString("yyyy-MM", System.Globalization.CultureInfo.InvariantCulture);
+        if (!_s.TmetricLogEnabled || Demo.Active || _backfillRunning || _s.TmetricLogBackfilledMonth == month) return;
+        if ((DateTime.Now - _lastBackfillAttempt).TotalMinutes < 5) return;
+        _backfillRunning = true;
+        _lastBackfillAttempt = DateTime.Now;
+        try
+        {
+            var today = DateTime.Today;
+            var from = new DateTime(today.Year, today.Month, 1);
+            var to = today.AddDays(1);
+            var entries = await _tmetric.ReadEntriesAsync(token, from, to);
+            var folder = TmetricLog.FolderFor(Settings.DataDirectory);
+            await Task.Run(() => TmetricLog.Write(folder, entries, DateTime.Now, from, to));
+            _s.TmetricLogBackfilledMonth = month;
+            _s.Save();
+        }
+        catch { /* TMetric not reachable or the file is locked: tried again later */ }
+        finally { _backfillRunning = false; }
     }
 
     private void OpenTmetricLog()
@@ -2015,6 +2046,14 @@ public partial class MainWindow : Window
         // Optional log: every TMetric entry (start, end, project, ticket ...) in a CSV per month that Excel opens.
         Part(Check("Einträge in Log-Datei schreiben (CSV, pro Monat)", () => _s.TmetricLogEnabled,
             () => { _s.TmetricLogEnabled = !_s.TmetricLogEnabled; if (_s.TmetricLogEnabled) _ = RefreshTmetricAsync(); }));
+        Part(Item("Log: ganzen Monat neu aus TMetric laden", () =>
+        {
+            _s.TmetricLogBackfilledMonth = null;
+            _s.Save();
+            _lastBackfillAttempt = DateTime.MinValue;
+            if (!_s.TmetricLogEnabled) ShowInfo("Das Log ist ausgeschaltet – zuerst „Einträge in Log-Datei schreiben“ einschalten.");
+            else _ = RefreshTmetricAsync();
+        }));
         Part(Item("Log-Datei dieses Monats öffnen (Excel)", OpenTmetricLog));
         Part(Item("Log-Ordner öffnen", OpenTmetricLogFolder));
         tmetric.Items.Add(new Separator());

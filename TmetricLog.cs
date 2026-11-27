@@ -24,17 +24,20 @@ public static class TmetricLog
 
     public static string FileFor(string folder, DateTime month) => Path.Combine(folder, $"TMetric-{month:yyyy-MM}.csv");
 
-    /// <summary>Merges <paramref name="entries"/> (the read window: yesterday to tomorrow) into the month files.</summary>
-    public static void Write(string folder, IReadOnlyList<TmetricEntry> entries, DateTime now)
+    /// <summary>
+    /// Merges <paramref name="entries"/> into the month files. They stand for TMetric's answer to a read of the days
+    /// <paramref name="windowFrom"/>..<paramref name="windowTo"/> (default: yesterday to tomorrow, like the regular read).
+    /// </summary>
+    public static void Write(string folder, IReadOnlyList<TmetricEntry> entries, DateTime now, DateTime? windowFrom = null, DateTime? windowTo = null)
     {
         if (entries.Count == 0) return;
+        var from = windowFrom ?? now.Date.AddDays(-1);
+        var to = windowTo ?? now.Date.AddDays(1);
         lock (Gate)
         {
             Directory.CreateDirectory(folder);
-            var windowFrom = now.Date.AddDays(-1);
-            var windowTo = now.Date.AddDays(1);
             foreach (var month in entries.GroupBy(e => new DateTime(e.Start.Year, e.Start.Month, 1)))
-                WriteMonth(FileFor(folder, month.Key), month.ToList(), now, windowFrom, windowTo);
+                WriteMonth(FileFor(folder, month.Key), month.ToList(), now, from, to);
         }
     }
 
