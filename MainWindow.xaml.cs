@@ -615,6 +615,9 @@ public partial class MainWindow : Window
     }
 
     private string? _recentSignature;
+    private TextBlock? _runningRowLabel;      // "läuft seit hh:mm · n min" of the green row - updated every second
+    private Button? _genericPill;             // the generic pill while it is the running entry - same
+    private string? _genericPillProject;
     private long? _quickProjectId;
     private string? _quickProjectName;
     private static readonly Brush TmetricGenericBrush = Frozen("#4CC2FF");
@@ -657,6 +660,8 @@ public partial class MainWindow : Window
         _recentSignature = signature;
 
         TmetricRecentPanel.Children.Clear();
+        _runningRowLabel = null;
+        _genericPill = null;
 
         // 1. the generic entry - on top (only when a quick project is set)
         if (hasGeneric)
@@ -683,7 +688,9 @@ public partial class MainWindow : Window
         };
         if (running)
         {
-            pill.Content = $"●  {project} (ohne Titel) · läuft seit {since:HH:mm}";
+            pill.Content = $"●  {project} (ohne Titel) · {RunningText(since, DateTime.Now)}";
+            _genericPill = pill;
+            _genericPillProject = project;
             pill.Background = TmetricCurrentBackground;
             pill.BorderBrush = TmetricRunningBrush;
             pill.IsHitTestVisible = false;   // it runs already - nothing to switch to
@@ -759,7 +766,7 @@ public partial class MainWindow : Window
         text.FontWeight = FontWeights.Bold;
         var label = new TextBlock
         {
-            Text = since is DateTime s ? $"läuft seit {s:HH:mm}" : "läuft",
+            Text = RunningText(since, DateTime.Now),
             FontSize = 11,
             FontWeight = FontWeights.SemiBold,
             Foreground = TmetricRunningBrush,
@@ -769,6 +776,7 @@ public partial class MainWindow : Window
         };
         Grid.SetColumn(label, 2);
         row.Children.Add(label);
+        _runningRowLabel = label;
 
         return new Border
         {
@@ -782,6 +790,27 @@ public partial class MainWindow : Window
         };
     }
 
+    /// <summary>"12 min", from one hour on "85 min (1:25 h)".</summary>
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        int minutes = Math.Max(0, (int)elapsed.TotalMinutes);
+        return minutes < 60 ? $"{minutes} min" : $"{minutes} min ({minutes / 60}:{minutes % 60:00} h)";
+    }
+
+    /// <summary>"läuft seit 09:40 · 12 min" for the running entry.</summary>
+    private static string RunningText(DateTime? since, DateTime now) =>
+        since is DateTime s ? $"läuft seit {s:HH:mm} · {FormatElapsed(now - s)}" : "läuft";
+
+    /// <summary>Called every second: the texts built once with the panel show the live running time.</summary>
+    private void UpdateRunningTimes(TmetricSnapshot data, DateTime now)
+    {
+        if (data.RunningSince is not DateTime since) return;
+        if (_runningRowLabel != null) _runningRowLabel.Text = RunningText(since, now);
+        if (_genericPill != null) _genericPill.Content = $"●  {_genericPillProject} (ohne Titel) · {RunningText(since, now)}";
+        if (_miniTimeRun != null) _miniTimeRun.Text = FormatElapsed(now - since) + "  ";
+    }
+
+    private System.Windows.Documents.Run? _miniTimeRun;
     private string? _miniTitleShown;
 
     /// <summary>Second line of the collapsed pill: the entry TMetric is tracking right now (hidden when nothing runs).</summary>
@@ -792,13 +821,21 @@ public partial class MainWindow : Window
         {
             MiniTmetricTitle.Visibility = Visibility.Collapsed;
             _miniTitleShown = null;
+            _miniTimeRun = null;
             return;
         }
         MiniTmetricTitle.Visibility = Visibility.Visible;
-        if (title == _miniTitleShown) return;   // rebuild only on change (this runs every second)
+        if (title == _miniTitleShown) return;   // rebuild only on change (this runs every second); the time is updated live
         _miniTitleShown = title;
         MiniTmetricTitle.Inlines.Clear();
         MiniTmetricTitle.Inlines.Add(new System.Windows.Documents.Run("● ") { Foreground = TmetricRunningBrush });
+        // Elapsed time first, so a long title is the part that gets trimmed.
+        _miniTimeRun = new System.Windows.Documents.Run(FormatElapsed(DateTime.Now - data.RunningSince!.Value) + "  ")
+        {
+            Foreground = TmetricRunningBrush,
+            FontWeight = FontWeights.SemiBold,
+        };
+        MiniTmetricTitle.Inlines.Add(_miniTimeRun);
         MiniTmetricTitle.Inlines.Add(new System.Windows.Documents.Run(title));
         MiniTmetricTitle.ToolTip = (data.RunningLabel ?? title) + "\nTMetric: läuft gerade";
     }
@@ -850,6 +887,7 @@ public partial class MainWindow : Window
             + (data.RunningSince == null ? " · kein Timer aktiv" : "")
             + stale;
         UpdateRecentPanel(data);
+        UpdateRunningTimes(data, now);
     }
 
     /// <summary>"Timer starten": switches TMetric to the quick project without a gap (asks for the project first if none is set).</summary>
