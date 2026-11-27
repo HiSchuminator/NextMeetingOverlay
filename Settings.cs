@@ -78,6 +78,8 @@ public sealed class Settings
     public bool TmetricShowMiniTitle { get; set; } = true;
     /// <summary>The running entry as a green row in the details.</summary>
     public bool TmetricShowRunningRow { get; set; } = true;
+    /// <summary>Write the TMetric entries to a CSV file per month (folder "TMetric-Log" next to the settings). Off by default.</summary>
+    public bool TmetricLogEnabled { get; set; } = false;
     /// <summary>Personal API token, DPAPI-protected (current user + PC).</summary>
     public string? TmetricTokenProtected { get; set; }
 

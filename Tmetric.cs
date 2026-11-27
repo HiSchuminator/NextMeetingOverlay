@@ -20,9 +20,14 @@ public sealed class TmetricSnapshot
     public string? RunningLabel { get; init; }
     /// <summary>Short title of the running entry: "#27791 Ticket title", or the note, or the project.</summary>
     public string? RunningTitle { get; init; }
+    /// <summary>All entries TMetric returned for the read window (yesterday to tomorrow), for the optional log file.</summary>
+    public IReadOnlyList<TmetricEntry> Entries { get; init; } = Array.Empty<TmetricEntry>();
 
     public TimeSpan TotalAt(DateTime now) => Completed + (RunningSince is DateTime s && now > s ? now - s : TimeSpan.Zero);
 }
+
+/// <summary>One time entry as TMetric reports it (times in local time). <see cref="End"/> null = the timer is still running.</summary>
+public sealed record TmetricEntry(long Id, DateTime Start, DateTime? End, string? Project, string? TaskNumber, string? Task, string? Note);
 
 /// <summary>
 /// Read-only access to the TMetric web API (v3, personal API token as bearer):
@@ -94,12 +99,17 @@ public sealed class TmetricClient
         DateTime? runningSince = null;
         string? label = null;
         string? runningTitle = null;
+        var entries = new List<TmetricEntry>();
 
         foreach (var entry in doc.RootElement.EnumerateArray())
         {
             if (!TryTime(entry, "startTime", out var start)) continue;
             bool running = !TryTime(entry, "endTime", out var end);
             if (running) end = now;
+
+            if (entry.TryGetProperty("id", out var idElement) && idElement.TryGetInt64(out var entryId))
+                entries.Add(new TmetricEntry(entryId, start, running ? null : end, Name(entry, "project"), TaskNumber(entry), Name(entry, "task"),
+                    entry.TryGetProperty("note", out var noteElement) && noteElement.ValueKind == JsonValueKind.String ? noteElement.GetString() : null));
 
             var from = start < dayStart ? dayStart : start;
             var to = end > dayEnd ? dayEnd : end;
@@ -116,8 +126,15 @@ public sealed class TmetricClient
                 completed += to - from;
             }
         }
-        return new TmetricSnapshot { Completed = completed, RunningSince = runningSince, RunningLabel = label, RunningTitle = runningTitle };
+        return new TmetricSnapshot { Completed = completed, RunningSince = runningSince, RunningLabel = label, RunningTitle = runningTitle, Entries = entries };
     }
+
+    /// <summary>Number of the ticket in the connected ticket system (e.g. "27791"), if the task is linked to one.</summary>
+    private static string? TaskNumber(JsonElement entry) =>
+        entry.TryGetProperty("task", out var t) && t.ValueKind == JsonValueKind.Object
+        && t.TryGetProperty("externalLink", out var link) && link.ValueKind == JsonValueKind.Object
+        && link.TryGetProperty("caption", out var cap) && cap.ValueKind == JsonValueKind.String
+            ? cap.GetString() : null;
 
     private static bool TryTime(JsonElement entry, string name, out DateTime local)
     {

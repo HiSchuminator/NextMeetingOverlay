@@ -584,6 +584,7 @@ public partial class MainWindow : Window
         {
             _tmetricData = await _tmetric.ReadTodayAsync(token);
             _tmetricError = null;
+            WriteTmetricLog(_tmetricData);
         }
         catch (TmetricAuthException)
         {
@@ -603,6 +604,33 @@ public partial class MainWindow : Window
             _tmetricBusy = false;
         }
         UpdateDisplay();
+    }
+
+    /// <summary>Optional log file: merges the entries of this read into the month's CSV (in the background, never blocks the display).</summary>
+    private void WriteTmetricLog(TmetricSnapshot data)
+    {
+        if (!_s.TmetricLogEnabled || Demo.Active) return;
+        var folder = TmetricLog.FolderFor(Settings.DataDirectory);
+        var entries = data.Entries;
+        _ = Task.Run(() =>
+        {
+            try { TmetricLog.Write(folder, entries, DateTime.Now); }
+            catch { /* locked by Excel or no write access: the next read tries again */ }
+        });
+    }
+
+    private void OpenTmetricLog()
+    {
+        var file = TmetricLog.FileFor(TmetricLog.FolderFor(Settings.DataDirectory), DateTime.Now);
+        if (!File.Exists(file)) { ShowInfo("Für diesen Monat gibt es noch kein TMetric-Log (erst nach der nächsten Abfrage)."); return; }
+        if (!TryStart(file)) ShowInfo("Die Log-Datei konnte nicht geöffnet werden – ist Excel installiert?");
+    }
+
+    private void OpenTmetricLogFolder()
+    {
+        var folder = TmetricLog.FolderFor(Settings.DataDirectory);
+        try { Directory.CreateDirectory(folder); } catch { }
+        if (!TryStart(folder)) ShowInfo("Der Log-Ordner konnte nicht geöffnet werden.");
     }
 
     private string? _recentSignature;
@@ -1983,6 +2011,12 @@ public partial class MainWindow : Window
             () => { _s.TmetricShowMiniTitle = !_s.TmetricShowMiniTitle; ResetTmetricPanels(); }));
         Part(Check("Laufenden Vorgang als grüne Zeile in den Details zeigen", () => _s.TmetricShowRunningRow,
             () => { _s.TmetricShowRunningRow = !_s.TmetricShowRunningRow; ResetTmetricPanels(); }));
+        tmetric.Items.Add(new Separator());
+        // Optional log: every TMetric entry (start, end, project, ticket ...) in a CSV per month that Excel opens.
+        Part(Check("Einträge in Log-Datei schreiben (CSV, pro Monat)", () => _s.TmetricLogEnabled,
+            () => { _s.TmetricLogEnabled = !_s.TmetricLogEnabled; if (_s.TmetricLogEnabled) _ = RefreshTmetricAsync(); }));
+        Part(Item("Log-Datei dieses Monats öffnen (Excel)", OpenTmetricLog));
+        Part(Item("Log-Ordner öffnen", OpenTmetricLogFolder));
         tmetric.Items.Add(new Separator());
         tmetric.Items.Add(Item("API-Token eintragen / ändern …", () =>
         {
