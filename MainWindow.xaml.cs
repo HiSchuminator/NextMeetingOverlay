@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _refreshTimer = new();
     private readonly DispatcherTimer _johnnyTimer = new() { Interval = TimeSpan.FromSeconds(2) };
     private readonly List<(MenuItem Item, Func<bool> IsChecked)> _checkItems = new();
+    private readonly List<MenuItem> _tmetricPartItems = new();   // TMetric menu entries that only work while TMetric is on
     private readonly HashSet<string> _johnnyHandled = new();   // meetings already asked about / auto-started
 
     private List<Meeting> _meetings = new();
@@ -642,9 +643,10 @@ public partial class MainWindow : Window
         string? runningKey = data.RunningKey;
         bool genericRunning = genericKey != null && runningKey == genericKey;
 
-        bool hasGeneric = !string.IsNullOrWhiteSpace(project);
-        // The generic pill shows the running state itself; any other running entry gets its own green row.
-        bool showRunningRow = data.RunningSince != null && !genericRunning;
+        bool hasGeneric = _s.TmetricShowQuickPill && !string.IsNullOrWhiteSpace(project);
+        // The generic pill shows the running state itself; any other running entry gets its own green row
+        // (also the generic one when its pill is switched off).
+        bool showRunningRow = _s.TmetricShowRunningRow && data.RunningSince != null && !(hasGeneric && genericRunning);
         string? runningTitle = data.RunningTitle ?? data.RunningLabel;
 
         if (!hasGeneric && !showRunningRow)
@@ -654,7 +656,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var signature = string.Join("\n", project, genericKey, runningKey, showRunningRow.ToString(), runningTitle, data.RunningSince?.ToString("HH:mm"));
+        var signature = string.Join("\n", project, genericKey, runningKey, hasGeneric.ToString(), showRunningRow.ToString(), runningTitle, data.RunningSince?.ToString("HH:mm"));
         TmetricRecentPanel.Visibility = Visibility.Visible;
         if (signature == _recentSignature) return;
         _recentSignature = signature;
@@ -816,7 +818,7 @@ public partial class MainWindow : Window
     /// <summary>Second line of the collapsed pill: the entry TMetric is tracking right now (hidden when nothing runs).</summary>
     private void UpdateMiniTmetricTitle(TmetricSnapshot data)
     {
-        var title = data.RunningSince != null ? data.RunningTitle : null;
+        var title = data.RunningSince != null && _s.TmetricShowMiniTitle ? data.RunningTitle : null;
         if (string.IsNullOrWhiteSpace(title))
         {
             MiniTmetricTitle.Visibility = Visibility.Collapsed;
@@ -2140,9 +2142,20 @@ public partial class MainWindow : Window
 
         // Optional: off until switched on (then asks for the personal API token).
         var tmetric = new MenuItem { Header = "TMetric (Arbeitszeit)" };
-        tmetric.Items.Add(Check("Arbeitszeit aus TMetric anzeigen", () => _s.TmetricEnabled, ToggleTmetric));
+        // Master switch first: off = the tool runs as if TMetric did not exist (no request, nothing shown, nothing written).
+        tmetric.Items.Add(Check("TMetric-Anbindung einschalten (Arbeitszeit anzeigen)", () => _s.TmetricEnabled, ToggleTmetric));
         tmetric.Items.Add(new Separator());
-        tmetric.Items.Add(Item("Timer starten (Schnellprojekt, ohne Pause)", () => _ = StartQuickTimerAsync()));
+        // Single parts - only active while the master switch is on (greyed out otherwise, see menu.Opened).
+        void Part(MenuItem item) { tmetric.Items.Add(item); _tmetricPartItems.Add(item); }
+        void ResetTmetricPanels() { _recentSignature = null; _miniTitleShown = null; _miniTimeRun = null; }
+        Part(Check("Laufenden Vorgang in der eingeklappten Pille zeigen (2. Zeile)", () => _s.TmetricShowMiniTitle,
+            () => { _s.TmetricShowMiniTitle = !_s.TmetricShowMiniTitle; ResetTmetricPanels(); }));
+        Part(Check("Laufenden Vorgang als grüne Zeile in den Details zeigen", () => _s.TmetricShowRunningRow,
+            () => { _s.TmetricShowRunningRow = !_s.TmetricShowRunningRow; ResetTmetricPanels(); }));
+        Part(Check("Schnellprojekt-Pille anzeigen (Timer wechseln)", () => _s.TmetricShowQuickPill,
+            () => { _s.TmetricShowQuickPill = !_s.TmetricShowQuickPill; ResetTmetricPanels(); }));
+        tmetric.Items.Add(new Separator());
+        Part(Item("Timer starten (Schnellprojekt, ohne Pause)", () => _ = StartQuickTimerAsync()));
         tmetric.Items.Add(Item("Projekt für „Timer starten“ ändern …", EditQuickProject));
         tmetric.Items.Add(new Separator());
         tmetric.Items.Add(Item("API-Token eintragen / ändern …", () =>
@@ -2155,7 +2168,7 @@ public partial class MainWindow : Window
             _ = RefreshTmetricAsync();
         }));
         tmetric.Items.Add(Item("API-Token entfernen", RemoveTmetricToken));
-        tmetric.Items.Add(Item("Jetzt aktualisieren", () => _ = RefreshTmetricAsync()));
+        Part(Item("Jetzt aktualisieren", () => _ = RefreshTmetricAsync()));
         menu.Items.Add(tmetric);
 
         var visibility = new MenuItem { Header = "Sichtbarkeit" };
@@ -2176,6 +2189,7 @@ public partial class MainWindow : Window
         menu.Opened += (_, _) =>
         {
             foreach (var (item, isChecked) in _checkItems) item.IsChecked = isChecked();
+            foreach (var part in _tmetricPartItems) part.IsEnabled = _s.TmetricEnabled;   // greyed out while TMetric is off
             _keywordItem.Header = KeywordHeader();
             _johnnyMenu.Visibility = _johnnyAvailable ? Visibility.Visible : Visibility.Collapsed;
             _rejoinItem.Visibility = _shown != null && _shown.JoinUrl != null && _joined.Contains(_shown.Key)
