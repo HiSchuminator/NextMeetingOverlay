@@ -27,7 +27,8 @@ public sealed class TmetricSnapshot
 }
 
 /// <summary>One time entry as TMetric reports it (times in local time). <see cref="End"/> null = the timer is still running.</summary>
-public sealed record TmetricEntry(long Id, DateTime Start, DateTime? End, string? Project, string? TaskNumber, string? Task, string? Note);
+public sealed record TmetricEntry(long Id, DateTime Start, DateTime? End, string? Client, string? Project, string? TaskNumber, string? Task,
+                                  string? Note, string? Tags, bool Billable, bool Invoiced);
 
 /// <summary>
 /// Read-only access to the TMetric web API (v3, personal API token as bearer):
@@ -147,7 +148,29 @@ public sealed class TmetricClient
         if (!entry.TryGetProperty("id", out var idElement) || !idElement.TryGetInt64(out var id)) return null;
         DateTime? end = TryTime(entry, "endTime", out var stop) ? stop : null;
         string? note = entry.TryGetProperty("note", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
-        return new TmetricEntry(id, start, end, Name(entry, "project"), TaskNumber(entry), Name(entry, "task"), note);
+        return new TmetricEntry(id, start, end, ClientName(entry), Name(entry, "project"), TaskNumber(entry), Name(entry, "task"), note,
+            TagNames(entry), Flag(entry, "isBillable"), Flag(entry, "isInvoiced"));
+    }
+
+    private static bool Flag(JsonElement entry, string property) =>
+        entry.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.True;
+
+    /// <summary>Name of the client the entry's project belongs to.</summary>
+    private static string? ClientName(JsonElement entry) =>
+        entry.TryGetProperty("project", out var p) && p.ValueKind == JsonValueKind.Object
+        && p.TryGetProperty("client", out var c) && c.ValueKind == JsonValueKind.Object
+        && c.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String
+            ? n.GetString() : null;
+
+    /// <summary>The entry's tags (including work types) as "tag1, tag2".</summary>
+    private static string? TagNames(JsonElement entry)
+    {
+        if (!entry.TryGetProperty("tags", out var tags) || tags.ValueKind != JsonValueKind.Array) return null;
+        var names = tags.EnumerateArray()
+            .Select(t => t.ValueKind == JsonValueKind.Object && t.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null)
+            .Where(s => !string.IsNullOrWhiteSpace(s));
+        var joined = string.Join(", ", names);
+        return joined.Length == 0 ? null : joined;
     }
 
     /// <summary>Number of the ticket in the connected ticket system (e.g. "27791"), if the task is linked to one.</summary>

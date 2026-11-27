@@ -15,8 +15,9 @@ namespace NextMeetingOverlay;
 /// </summary>
 public static class TmetricLog
 {
+    // The ID stays the last column (rows are matched by it); Datum and Start stay the first two (rows are sorted by them).
     private static readonly string[] Header =
-        { "Datum", "Start", "Ende", "Dauer (min)", "Dauer (h:mm)", "Projekt", "Ticket", "Aufgabe", "Notiz", "ID" };
+        { "Datum", "Start", "Ende", "Dauer (min)", "Dauer (h:mm)", "Kunde", "Projekt", "Ticket", "Aufgabe", "Notiz", "Tags", "Abrechenbar", "Fakturiert", "ID" };
 
     private static readonly object Gate = new();
 
@@ -28,7 +29,8 @@ public static class TmetricLog
     /// Merges <paramref name="entries"/> into the month files. They stand for TMetric's answer to a read of the days
     /// <paramref name="windowFrom"/>..<paramref name="windowTo"/> (default: yesterday to tomorrow, like the regular read).
     /// </summary>
-    public static void Write(string folder, IReadOnlyList<TmetricEntry> entries, DateTime now, DateTime? windowFrom = null, DateTime? windowTo = null)
+    public static void Write(string folder, IReadOnlyList<TmetricEntry> entries, DateTime now, DateTime? windowFrom = null, DateTime? windowTo = null,
+                             bool buildWorkbook = true)
     {
         if (entries.Count == 0) return;
         var from = windowFrom ?? now.Date.AddDays(-1);
@@ -38,6 +40,17 @@ public static class TmetricLog
             Directory.CreateDirectory(folder);
             foreach (var month in entries.GroupBy(e => new DateTime(e.Start.Year, e.Start.Month, 1)))
                 WriteMonth(FileFor(folder, month.Key), month.ToList(), now, from, to);
+        }
+        if (buildWorkbook) BuildWorkbookIfNeeded(folder);
+    }
+
+    /// <summary>Rebuilds TMetric-Log.xlsx when a CSV is newer. A workbook that is open in Excel cannot be replaced - it follows with the next change.</summary>
+    public static void BuildWorkbookIfNeeded(string folder)
+    {
+        lock (Gate)
+        {
+            try { if (TmetricXlsx.NeedsBuild(folder)) TmetricXlsx.Build(folder); }
+            catch { /* locked by Excel: tried again after the next change */ }
         }
     }
 
@@ -50,7 +63,10 @@ public static class TmetricLog
         if (File.Exists(path))
         {
             before = File.ReadAllText(path, Encoding.UTF8);
-            foreach (var line in before.Split('\n').Select(l => l.TrimEnd('\r')).Skip(1).Where(l => l.Length > 12))
+            // A file in an older column layout cannot be mixed with the new rows: it is rebuilt from what TMetric returns
+            // (the history load re-reads every month).
+            bool sameLayout = before.StartsWith(string.Join(";", Header), StringComparison.Ordinal);
+            foreach (var line in before.Split('\n').Select(l => l.TrimEnd('\r')).Skip(1).Where(l => sameLayout && l.Length > 12))
             {
                 var id = line[(line.LastIndexOf(';') + 1)..];
                 if (freshIds.Contains(id)) continue;   // replaced by the current version below
@@ -96,7 +112,8 @@ public static class TmetricLog
             e.End is DateTime stop ? stop.ToString("HH:mm", CultureInfo.InvariantCulture) : "läuft",
             minutes.ToString(CultureInfo.InvariantCulture),
             $"{minutes / 60}:{minutes % 60:00}",
-            Csv(e.Project), Csv(e.TaskNumber), Csv(e.Task), Csv(e.Note),
+            Csv(e.Client), Csv(e.Project), Csv(e.TaskNumber), Csv(e.Task), Csv(e.Note), Csv(e.Tags),
+            e.Billable ? "Ja" : "Nein", e.Invoiced ? "Ja" : "Nein",
             e.Id.ToString(CultureInfo.InvariantCulture));
     }
 

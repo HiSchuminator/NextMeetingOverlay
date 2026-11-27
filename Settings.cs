@@ -82,6 +82,10 @@ public sealed class Settings
     public bool TmetricLogEnabled { get; set; } = false;
     /// <summary>Month ("yyyy-MM") for which the log was filled with all entries of that month so far; once per month, automatically.</summary>
     public string? TmetricLogBackfilledMonth { get; set; }
+    /// <summary>The history (see <see cref="TmetricLogHistoryYears"/>) was loaded once, month by month. Reset = load it again.</summary>
+    public bool TmetricLogHistoryLoaded { get; set; } = false;
+    /// <summary>How many years back the one-time history load goes (TMetric has nothing before the account existed).</summary>
+    public int TmetricLogHistoryYears { get; set; } = 5;
     /// <summary>Personal API token, DPAPI-protected (current user + PC).</summary>
     public string? TmetricTokenProtected { get; set; }
 
