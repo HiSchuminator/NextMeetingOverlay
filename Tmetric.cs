@@ -166,76 +166,6 @@ public sealed class TmetricClient
         return null;
     }
 
-    /// <summary>The recently used combinations (project + ticket/task or note) as TMetric lists them, newest first, without duplicates.</summary>
-    public async Task<List<TmetricRecent>> ReadRecentAsync(string token, CancellationToken ct = default)
-    {
-        await ConnectAsync(token, ct);
-        var list = new List<TmetricRecent>();
-        using var doc = await GetAsync($"/accounts/{_accountId}/timeentries/recent?userId={_userId}", token, ct);
-        if (doc.RootElement.ValueKind != JsonValueKind.Array) return list;
-        foreach (var e in doc.RootElement.EnumerateArray())
-        {
-            long? projectId = e.TryGetProperty("project", out var p) && p.ValueKind == JsonValueKind.Object
-                && p.TryGetProperty("id", out var pid) && pid.TryGetInt64(out var pv) ? pv : null;
-            long? taskId = e.TryGetProperty("task", out var t) && t.ValueKind == JsonValueKind.Object
-                && t.TryGetProperty("id", out var tid) && tid.TryGetInt64(out var tv) ? tv : null;
-            string? note = e.TryGetProperty("note", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString() : null;
-            string? number = e.TryGetProperty("task", out var t2) && t2.ValueKind == JsonValueKind.Object
-                && t2.TryGetProperty("externalLink", out var link) && link.ValueKind == JsonValueKind.Object
-                && link.TryGetProperty("caption", out var cap) && cap.ValueKind == JsonValueKind.String ? cap.GetString() : null;
-            bool billable = e.TryGetProperty("isBillable", out var b) && b.ValueKind == JsonValueKind.True;
-
-            var recent = new TmetricRecent
-            {
-                ProjectId = projectId,
-                ProjectName = Name(e, "project"),
-                TaskId = taskId,
-                TaskName = Name(e, "task"),
-                TaskNumber = number,
-                Note = note?.Trim() ?? "",
-                IsBillable = billable,
-            };
-            // Entries without anything to resume (no project, task or note) are of no use as a shortcut.
-            if (projectId == null && taskId == null && recent.Note.Length == 0) continue;
-            if (list.Any(x => x.Key == recent.Key)) continue;
-            list.Add(recent);
-        }
-        return list;
-    }
-
-    /// <summary>Resume a recent combination: stops the running timer and starts it again (same project/task/note), no gap.</summary>
-    public async Task<TmetricSwitchResult> StartRecentAsync(string token, TmetricRecent target, CancellationToken ct = default)
-    {
-        await ConnectAsync(token, ct);
-        var running = await GetRunningAsync(token, ct);
-        if (running?.Key == target.Key) return TmetricSwitchResult.AlreadyRunning;
-
-        var body = new JsonObject();
-        if (target.ProjectId != null) body["project"] = new JsonObject { ["id"] = target.ProjectId };
-        if (target.TaskId != null) body["task"] = new JsonObject { ["id"] = target.TaskId };
-        if (target.Note.Length > 0) body["note"] = target.Note;
-        if (target.IsBillable) body["isBillable"] = true;
-        return await SwitchAsync(token, running?.Id, body, ct);
-    }
-
-    /// <summary>
-    /// Explicit "Pause": stops the running timer and starts nothing. The gap that follows is the break in TMetric.
-    /// Returns false if no timer was running.
-    /// </summary>
-    public async Task<bool> StopRunningAsync(string token, CancellationToken ct = default)
-    {
-        await ConnectAsync(token, ct);
-        var running = await GetRunningAsync(token, ct);
-        if (running == null) return false;
-
-        // Same spelling as in SwitchAsync: the stop (PUT) takes local time without offset.
-        var now = DateTime.Now;
-        var localStamp = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, now.Second, DateTimeKind.Local)
-            .ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture);
-        using var _ = await SendAsync(HttpMethod.Put, $"/accounts/{_accountId}/timeentries/{running.Id}", token, new { endTime = localStamp }, ct);
-        return true;
-    }
-
     private sealed record RunningEntry(long Id, string Key);
 
     /// <summary>The latest entry, if it has no end time (= the timer is running).</summary>
@@ -355,35 +285,4 @@ public sealed class TmetricStartAfterStopException : Exception
 {
     public TmetricStartAfterStopException(string reason)
         : base("Der laufende Timer wurde beendet, der neue konnte aber nicht gestartet werden (" + reason + ")") { }
-}
-
-/// <summary>One entry of TMetric's "recent" list - a shortcut to resume that project/ticket/note.</summary>
-public sealed class TmetricRecent
-{
-    public long? ProjectId { get; init; }
-    public string? ProjectName { get; init; }
-    public long? TaskId { get; init; }
-    public string? TaskName { get; init; }
-    /// <summary>Ticket number of an integrated task (e.g. the number of the ticket in the connected ticket system).</summary>
-    public string? TaskNumber { get; init; }
-    public string Note { get; init; } = "";
-    public bool IsBillable { get; init; }
-
-    public string Key => TmetricClient.EntryKey(ProjectId, TaskId, Note);
-
-    /// <summary>Short text for the list: "#27791 Ticket title" or the note.</summary>
-    public string Title
-    {
-        get
-        {
-            if (!string.IsNullOrWhiteSpace(TaskName))
-                return string.IsNullOrWhiteSpace(TaskNumber) ? TaskName! : $"#{TaskNumber} {TaskName}";
-            if (Note.Length > 0) return Note;
-            return ProjectName ?? "(ohne Titel)";
-        }
-    }
-
-    public string FullDescription =>
-        string.Join(" – ", new[] { ProjectName, Title == ProjectName ? null : Title, TaskId != null && Note.Length > 0 ? Note : null }
-            .Where(s => !string.IsNullOrWhiteSpace(s)));
 }

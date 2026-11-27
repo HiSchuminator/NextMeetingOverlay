@@ -26,9 +26,8 @@ Kleines Windows-Overlay, das den nächsten Outlook-Termin anzeigt – als unauff
 
 - **Optional: TMetric-Arbeitszeit** – standardmäßig aus. Einschalten: Rechtsklick → **TMetric (Arbeitszeit)** → „Arbeitszeit aus TMetric anzeigen“ und den persönlichen API-Token eintragen (TMetric → Profil → „Get new API token“). Der Token wird nur auf deinem PC verschlüsselt gespeichert.
   - **Anzeige:** heute erfasste Zeit (`⏱ 5:12`, mit laufendem Timer `● 5:12` in Grün). In der eingeklappten Pille steht in einer zweiten Zeile der laufende Vorgang; aufgeklappt ist er grün markiert („läuft seit 09:40“). Ein Klick auf die Zeit öffnet die TMetric-Desktop-App bzw. die Webseite.
-  - **Schnellwahl zum Wechseln:** darunter die zuletzt genutzten Einträge (Projekt, Ticket oder Notiz) – ein Klick beendet den laufenden Timer und startet den gewählten im selben Moment, es entsteht keine Pause. Optional steht ganz oben eine **Schnellprojekt-Pille** („<Projekt> (ohne Titel)“): Rechtsklick → TMetric → „Projekt für Timer starten ändern …“.
-  - **⏸ Pause:** Solange ein Timer läuft, steht direkt unter der Schnellprojekt-Pille ein orangefarbener Knopf **Pause**. Ein Klick beendet den laufenden Timer, ohne einen neuen zu starten – die Lücke in TMetric ist die Pause. Weiter geht es mit einem Klick auf einen Eintrag. Auch über Rechtsklick → TMetric → „Pause (laufenden Timer beenden)“.
-  - **Lesen und Schreiben:** Das Overlay liest nur. Es ändert den Timer in TMetric ausschließlich, wenn du selbst auf einen dieser Einträge oder auf **Pause** klickst.
+  - **Schnellprojekt-Pille (optional):** Stellst du unter Rechtsklick → TMetric → „Projekt für Timer starten ändern …“ ein Projekt ein, steht in den Details eine Pille „<Projekt> (ohne Titel)“. Ein Klick beendet den laufenden Timer und startet im selben Moment einen Timer auf dieses Projekt – ohne Aufgabe und Beschreibung, es entsteht keine Pause. Läuft dieser Timer schon, ist die Pille grün.
+  - **Lesen und Schreiben:** Das Overlay liest nur. Es ändert den Timer in TMetric ausschließlich, wenn du selbst auf die Schnellprojekt-Pille klickst.
   - Abgefragt wird alle 30 Sekunden und sofort beim Aufklappen. Der Knopf **↻** (oder Rechtsklick → „Jetzt aktualisieren“) lädt Kalender und TMetric sofort neu.
 
 ## Kalender
