@@ -797,9 +797,9 @@ public partial class MainWindow : Window
         return minutes < 60 ? $"{minutes} min" : $"{minutes} min ({minutes / 60}:{minutes % 60:00} h)";
     }
 
-    /// <summary>"läuft seit 09:40 · 12 min" for the running entry.</summary>
+    /// <summary>"läuft seit 09:40 Uhr · 12 min" for the running entry.</summary>
     private static string RunningText(DateTime? since, DateTime now) =>
-        since is DateTime s ? $"läuft seit {s:HH:mm} · {FormatElapsed(now - s)}" : "läuft";
+        since is DateTime s ? $"läuft seit {s:HH:mm} Uhr · {FormatElapsed(now - s)}" : "läuft";
 
     /// <summary>Called every second: the texts built once with the panel show the live running time.</summary>
     private void UpdateRunningTimes(TmetricSnapshot data, DateTime now)
