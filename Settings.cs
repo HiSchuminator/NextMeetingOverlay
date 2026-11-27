@@ -72,18 +72,14 @@ public sealed class Settings
     public bool TodoOutlookFree { get; set; } = true;
 
     // TMetric (optional, off by default): shows today's tracked time and the running timer, read-only.
-    /// <summary>Master switch: off = no TMetric request at all, nothing shown, nothing written. The three switches below only matter when it is on.</summary>
+    /// <summary>Master switch: off = no TMetric request at all, nothing shown. The two switches below only matter when it is on.</summary>
     public bool TmetricEnabled { get; set; } = false;
     /// <summary>Second line of the collapsed pill: what is tracked right now.</summary>
     public bool TmetricShowMiniTitle { get; set; } = true;
     /// <summary>The running entry as a green row in the details.</summary>
     public bool TmetricShowRunningRow { get; set; } = true;
-    /// <summary>The quick-project pill (the only place that writes to TMetric: it switches the timer).</summary>
-    public bool TmetricShowQuickPill { get; set; } = true;
     /// <summary>Personal API token, DPAPI-protected (current user + PC).</summary>
     public string? TmetricTokenProtected { get; set; }
-    /// <summary>Project of the generic "Timer starten" pill (stops the running timer, starts this one without task/note). Empty = no pill.</summary>
-    public string TmetricQuickProject { get; set; } = "";
 
     [JsonIgnore]
     public string? TmetricToken
